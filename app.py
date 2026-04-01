@@ -16,9 +16,6 @@ class ReviewRequest(BaseModel):
 
 
 def process_review_job(req: ReviewRequest):
-    """
-    后台慢慢跑 max/full
-    """
     run_once(
         asin=req.asin,
         mode=req.mode,
@@ -34,9 +31,6 @@ def health():
 
 @app.post("/run-review-check")
 def run_review_check(req: ReviewRequest, background_tasks: BackgroundTasks):
-    """
-    立刻返回，后台处理
-    """
     background_tasks.add_task(process_review_job, req)
     return {
         "status": "accepted",
@@ -46,10 +40,6 @@ def run_review_check(req: ReviewRequest, background_tasks: BackgroundTasks):
 
 @app.get("/latest-result")
 def latest_result(asin: str):
-    """
-    给飞书读取的快接口
-    只读取本地已经保存好的 last_result json
-    """
     asin = asin.strip().upper()
     file_path = Path("output") / f"reviews_{asin}_last_result.json"
 
@@ -61,3 +51,33 @@ def latest_result(asin: str):
         return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"读取结果失败: {e}")
+
+
+@app.get("/latest-result-flat")
+def latest_result_flat(asin: str):
+    asin = asin.strip().upper()
+    file_path = Path("output") / f"reviews_{asin}_last_result.json"
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail=f"未找到 {asin} 的最新结果")
+
+    try:
+        data = json.loads(file_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取结果失败: {e}")
+
+    new_reviews = data.get("new_reviews", [])
+    first_review = new_reviews[0] if new_reviews else {}
+
+    return {
+        "asin": data.get("asin"),
+        "scraped_at": data.get("scraped_at"),
+        "current_total": data.get("current_total", 0),
+        "new_count": data.get("new_count", 0),
+        "has_new": 1 if data.get("new_count", 0) > 0 else 0,
+
+        "title": first_review.get("Title", ""),
+        "content": first_review.get("Text", ""),
+        "title_zh": first_review.get("Title_zh", ""),
+        "content_zh": first_review.get("Text_zh", "")
+    }
