@@ -66,6 +66,10 @@ def latest_result_flat(asin: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"读取结果失败: {e}")
 
+    # 👇关键：没有新评论就直接返回空
+    if data.get("new_count", 0) == 0:
+        return {}
+
     new_reviews = data.get("new_reviews", [])
     first_review = new_reviews[0] if new_reviews else {}
 
@@ -74,7 +78,6 @@ def latest_result_flat(asin: str):
         "scraped_at": data.get("scraped_at"),
         "current_total": data.get("current_total", 0),
         "new_count": data.get("new_count", 0),
-        "has_new": 1 if data.get("new_count", 0) > 0 else 0,
 
         "title": first_review.get("Title", ""),
         "content": first_review.get("Text", ""),
