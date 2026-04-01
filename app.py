@@ -7,7 +7,19 @@ from pydantic import BaseModel
 from review_incremental_only_new import run_once
 
 app = FastAPI()
+import shutil
+from pathlib import Path
 
+@app.post("/reset-data")
+def reset_data():
+    folder = Path("output")
+
+    if folder.exists():
+        shutil.rmtree(folder)
+
+    folder.mkdir(exist_ok=True)
+
+    return {"status": "ok", "message": "所有历史数据已清空"}
 
 class ReviewRequest(BaseModel):
     asin: str
