@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
 from review_incremental_only_new import run_once
@@ -15,27 +15,32 @@ class ReviewRequest(BaseModel):
     translate_mode: str = "full"
 
 
+def process_review_job(req: ReviewRequest):
+    """
+    后台慢慢跑 max/full
+    """
+    run_once(
+        asin=req.asin,
+        mode=req.mode,
+        translate_mode=req.translate_mode,
+        output_dir="output",
+    )
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
 @app.post("/run-review-check")
-def run_review_check(req: ReviewRequest):
+def run_review_check(req: ReviewRequest, background_tasks: BackgroundTasks):
     """
-    真正执行抓取任务的慢接口
-    可用于你自己手动触发，或者后面接定时服务
+    立刻返回，后台处理
     """
-    result = run_once(
-        asin=req.asin,
-        mode=req.mode,
-        translate_mode=req.translate_mode,
-        output_dir="output",
-    )
+    background_tasks.add_task(process_review_job, req)
     return {
-        "status": "success",
-        "message": "抓取完成",
-        "result": result,
+        "status": "accepted",
+        "message": "任务已接收，后台处理中"
     }
 
 
