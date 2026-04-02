@@ -57,7 +57,8 @@ def translate_text(text: str, target_lang: str = "zh-CN") -> str:
     try:
         if not text:
             return ""
-        return GoogleTranslator(source="auto", target=target_lang).translate(text)
+        translated = GoogleTranslator(source="auto", target=target_lang).translate(text)
+        return translated or ""
     except Exception:
         return text
 
@@ -197,14 +198,14 @@ def translate_reviews_inplace(reviews: list, translate_mode: str = "none", targe
         title_map = translate_unique_texts(titles, target_lang=target_lang)
         for r in reviews:
             src = str(r.get("Title", "") or "")
-            r["Title_zh"] = title_map.get(src, src)
+            r["Title_zh"] = title_map.get(src, src) or ""
 
     if translate_mode == "full":
         texts = [str(r.get("Text", "") or "") for r in reviews]
         text_map = translate_unique_texts(texts, target_lang=target_lang)
         for r in reviews:
             src = str(r.get("Text", "") or "")
-            r["Text_zh"] = text_map.get(src, src)
+            r["Text_zh"] = text_map.get(src, src) or ""
 
     return reviews
 
@@ -244,8 +245,8 @@ def to_review_rows(asin: str, reviews: list[dict], scraped_at: str) -> list[dict
             "text": r.get("Text", ""),
             "rating": r.get("OverallRating"),
             "origin_description": r.get("OriginDescription", ""),
-            "title_zh": r.get("Title_zh", ""),
-            "text_zh": r.get("Text_zh", ""),
+            "title_zh": r.get("Title_zh") or "",
+            "text_zh": r.get("Text_zh") or "",
             "scraped_at": scraped_at,
             "raw_payload": r,
         })
