@@ -1,0 +1,56 @@
+name: Feishu New Review Notify
+
+on:
+  workflow_run:
+    workflows: ["Review Sync Scheduler"]
+    types: [completed]
+  workflow_dispatch: {}
+
+jobs:
+  notify:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch new-review summary
+        run: |
+          curl -sS "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/runs/new?limit=200" -o summary.json
+
+      - name: Build message
+        run: |
+          python - << 'PY'
+          import json
+
+          with open("summary.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          items = data.get("asins_with_new_reviews", [])
+          if not items:
+              text = "今日评论新增：0（无新增）"
+          else:
+              lines = ["今日评论新增汇总："]
+              for item in items:
+                  asin = item.get("asin", "")
+                  new_count = item.get("new_count", 0)
+                  total = item.get("current_total", 0)
+                  lines.append(f"- {asin}: +{new_count}（总量 {total}）")
+              text = "\n".join(lines)
+
+          payload = {
+              "msg_type": "text",
+              "content": {"text": text},
+          }
+          with open("payload.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f, ensure_ascii=False)
+          PY
+
+      - name: Send to Feishu
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+        run: |
+          if [ -z "$FEISHU_WEBHOOK" ]; then
+            echo "Missing GitHub secret: FEISHU_WEBHOOK"
+            exit 1
+          fi
+          curl -sS -X POST "$FEISHU_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d @payload.json

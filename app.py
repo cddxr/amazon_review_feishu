@@ -14,7 +14,6 @@ from uuid import uuid4
 load_dotenv()
 
 app = FastAPI()
-TASKS = {}
 
 
 def now_iso():
@@ -33,27 +32,58 @@ def ensure_required_env():
         )
 
 
+def create_task_record(task_id: str, asin: str, mode: str, translate_mode: str):
+    supabase = create_supabase_client()
+    payload = {
+        "task_id": task_id,
+        "asin": asin,
+        "mode": mode,
+        "translate_mode": translate_mode,
+        "status": "queued",
+        "result": None,
+        "error": None,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    return supabase.table("review_sync_tasks").insert(payload).execute()
+
+
+def update_task_record(task_id: str, status: str, result=None, error=None):
+    supabase = create_supabase_client()
+    payload = {
+        "status": status,
+        "updated_at": now_iso(),
+        "result": result,
+        "error": error,
+    }
+    return (
+        supabase.table("review_sync_tasks")
+        .update(payload)
+        .eq("task_id", task_id)
+        .execute()
+    )
+
+
 def run_sync_task(task_id: str, asin: str, mode: str, translate_mode: str):
     try:
-        TASKS[task_id]["status"] = "running"
-        TASKS[task_id]["updated_at"] = now_iso()
+        update_task_record(task_id=task_id, status="running")
         result = run_once(
             asin=asin,
             mode=mode,
             translate_mode=translate_mode,
             include_reviews=False,
         )
-        TASKS[task_id]["status"] = "success"
-        TASKS[task_id]["result"] = result
-        TASKS[task_id]["updated_at"] = now_iso()
+        update_task_record(task_id=task_id, status="success", result=result)
     except Exception as e:
-        TASKS[task_id]["status"] = "failed"
-        TASKS[task_id]["error"] = {
-            "error": str(e),
-            "type": e.__class__.__name__,
-            "trace": traceback.format_exc(),
-        }
-        TASKS[task_id]["updated_at"] = now_iso()
+        update_task_record(
+            task_id=task_id,
+            status="failed",
+            error={
+                "error": str(e),
+                "type": e.__class__.__name__,
+                "trace": traceback.format_exc(),
+            },
+        )
 
 
 @app.get("/health")
@@ -108,19 +138,22 @@ def reviews_sync_async(
 ):
     ensure_required_env()
     task_id = str(uuid4())
-    TASKS[task_id] = {
-        "task_id": task_id,
-        "status": "queued",
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "params": {
-            "asin": asin,
-            "mode": mode,
-            "translate_mode": translate_mode,
-        },
-        "result": None,
-        "error": None,
-    }
+    try:
+        create_task_record(
+            task_id=task_id,
+            asin=asin,
+            mode=mode,
+            translate_mode=translate_mode,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": str(e),
+                "type": e.__class__.__name__,
+                "hint": "Create table public.review_sync_tasks first.",
+            },
+        )
     background_tasks.add_task(run_sync_task, task_id, asin, mode, translate_mode)
     return {
         "task_id": task_id,
@@ -131,24 +164,37 @@ def reviews_sync_async(
 
 @app.get("/reviews/sync/tasks/{task_id}")
 def get_sync_task(task_id: str):
-    task = TASKS.get(task_id)
-    if not task:
+    ensure_required_env()
+    supabase = create_supabase_client()
+    result = (
+        supabase.table("review_sync_tasks")
+        .select("task_id,asin,mode,translate_mode,status,result,error,created_at,updated_at")
+        .eq("task_id", task_id)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
         raise HTTPException(status_code=404, detail={"error": "Task not found"})
-    return task
+    return rows[0]
 
 
 @app.get("/reviews/sync/runs/new")
 def get_asins_with_new_reviews(
     limit: int = Query(100, ge=1, le=500, description="Max runs to scan"),
+    hours: int = Query(24, ge=1, le=168, description="Look-back window in hours"),
 ):
     ensure_required_env()
     try:
         supabase = create_supabase_client()
+        cutoff = datetime.now(timezone.utc).timestamp() - (hours * 3600)
+        cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
         result = (
             supabase.table("review_sync_runs")
             .select("asin,new_count,current_total,mode,translate_mode,created_at,status")
             .eq("status", "success")
             .gt("new_count", 0)
+            .gte("created_at", cutoff_iso)
             .order("created_at", desc=True)
             .limit(limit)
             .execute()
@@ -161,6 +207,7 @@ def get_asins_with_new_reviews(
                 latest_by_asin[asin] = row
         return {
             "count": len(latest_by_asin),
+            "hours": hours,
             "asins_with_new_reviews": list(latest_by_asin.values()),
         }
     except Exception as e:
