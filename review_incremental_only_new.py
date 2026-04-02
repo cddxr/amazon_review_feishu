@@ -31,6 +31,9 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 BASE_URL = "https://www.woot.com/review/Reviews/"
+SUPABASE_PAGE_SIZE = 1000
+UPSERT_BATCH_SIZE = 200
+STATE_REVIEW_KEYS_LIMIT = 200
 
 
 def get_env(name: str, required: bool = True, default: str | None = None) -> str | None:
@@ -59,7 +62,7 @@ def translate_text(text: str, target_lang: str = "zh-CN") -> str:
         return text
 
 
-def translate_unique_texts(texts, target_lang="zh-CN", max_workers=8):
+def translate_unique_texts(texts, target_lang="zh-CN", max_workers=4):
     unique_texts = []
     seen = set()
 
@@ -207,14 +210,27 @@ def translate_reviews_inplace(reviews: list, translate_mode: str = "none", targe
 
 
 def get_existing_review_keys(supabase: Client, asin: str) -> set[str]:
-    result = (
-        supabase.table("reviews")
-        .select("review_key")
-        .eq("asin", asin)
-        .execute()
-    )
-    rows = result.data or []
-    return {row["review_key"] for row in rows if row.get("review_key")}
+    all_keys = set()
+    start = 0
+
+    while True:
+        end = start + SUPABASE_PAGE_SIZE - 1
+        result = (
+            supabase.table("reviews")
+            .select("review_key")
+            .eq("asin", asin)
+            .range(start, end)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            break
+        all_keys.update({row["review_key"] for row in rows if row.get("review_key")})
+        if len(rows) < SUPABASE_PAGE_SIZE:
+            break
+        start += SUPABASE_PAGE_SIZE
+
+    return all_keys
 
 
 def to_review_rows(asin: str, reviews: list[dict], scraped_at: str) -> list[dict]:
@@ -239,11 +255,16 @@ def to_review_rows(asin: str, reviews: list[dict], scraped_at: str) -> list[dict
 def upsert_reviews(supabase: Client, rows: list[dict]):
     if not rows:
         return None
-    return (
-        supabase.table("reviews")
-        .upsert(rows, on_conflict="asin,review_key")
-        .execute()
-    )
+    total = 0
+    for i in range(0, len(rows), UPSERT_BATCH_SIZE):
+        chunk = rows[i:i + UPSERT_BATCH_SIZE]
+        (
+            supabase.table("reviews")
+            .upsert(chunk, on_conflict="asin,review_key")
+            .execute()
+        )
+        total += len(chunk)
+    return {"upserted_rows": total}
 
 
 def upsert_sync_state(
@@ -256,7 +277,7 @@ def upsert_sync_state(
 ):
     payload = {
         "asin": asin,
-        "review_keys": sorted(list(current_keys)),
+        "review_keys": sorted(list(current_keys))[:STATE_REVIEW_KEYS_LIMIT],
         "last_total_reviews": current_total,
         "last_new_count": new_count,
         "last_check_time": scraped_at,
@@ -275,6 +296,8 @@ def incremental_update(
     asin: str,
     current_reviews: list,
     translate_mode: str = "none",
+    include_reviews: bool = False,
+    sample_size: int = 5,
 ):
     """
     第一次运行：全部写入
@@ -300,7 +323,7 @@ def incremental_update(
 
     scraped_at = now_iso()
     rows = to_review_rows(asin, new_reviews, scraped_at)
-    upsert_reviews(supabase, rows)
+    upsert_result = upsert_reviews(supabase, rows)
     upsert_sync_state(
         supabase=supabase,
         asin=asin,
@@ -315,8 +338,11 @@ def incremental_update(
         "scraped_at": scraped_at,
         "current_total": len(current_reviews),
         "new_count": len(new_reviews),
-        "new_reviews": new_reviews,
+        "upserted_rows": (upsert_result or {}).get("upserted_rows", 0),
+        "new_reviews_sample": new_reviews[:max(0, sample_size)],
     }
+    if include_reviews:
+        result["new_reviews"] = new_reviews
     return result
 
 
@@ -324,6 +350,7 @@ def run_once(
     asin: str,
     mode: str = "max",
     translate_mode: str = "none",
+    include_reviews: bool = False,
 ):
     asin = asin.strip().upper()
     supabase = create_supabase_client()
@@ -337,6 +364,7 @@ def run_once(
         asin=asin,
         current_reviews=reviews,
         translate_mode=translate_mode,
+        include_reviews=include_reviews,
     )
 
     print(json.dumps({

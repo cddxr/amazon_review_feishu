@@ -36,7 +36,12 @@ def run_sync_task(task_id: str, asin: str, mode: str, translate_mode: str):
     try:
         TASKS[task_id]["status"] = "running"
         TASKS[task_id]["updated_at"] = now_iso()
-        result = run_once(asin=asin, mode=mode, translate_mode=translate_mode)
+        result = run_once(
+            asin=asin,
+            mode=mode,
+            translate_mode=translate_mode,
+            include_reviews=False,
+        )
         TASKS[task_id]["status"] = "success"
         TASKS[task_id]["result"] = result
         TASKS[task_id]["updated_at"] = now_iso()
@@ -71,10 +76,16 @@ def reviews_sync(
     asin: str = Query(..., description="Amazon ASIN"),
     mode: str = Query("max", description="basic / full / max"),
     translate_mode: str = Query("full", description="none / title / full"),
+    include_reviews: bool = Query(False, description="Return full new_reviews list"),
 ):
     ensure_required_env()
     try:
-        return run_once(asin=asin, mode=mode, translate_mode=translate_mode)
+        return run_once(
+            asin=asin,
+            mode=mode,
+            translate_mode=translate_mode,
+            include_reviews=include_reviews,
+        )
     except Exception as e:
         # Return readable error details for quick deployment debugging.
         raise HTTPException(
