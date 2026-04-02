@@ -2,20 +2,23 @@ name: Review Sync Scheduler
 
 on:
   schedule:
-    # Every 6 hours (UTC)
-    - cron: "0 */6 * * *"
+    # Daily at 08:00 Asia/Shanghai (00:00 UTC)
+    - cron: "0 0 * * *"
   workflow_dispatch: {}
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        asin:
+          - B0DDCJFFBM # VP203
+          - B0DFBMVX7T # VP204
+          - B0F8HXNY5N # VP218
+          - B0G64PSMX4 # XG001
     steps:
-      - name: Call review sync API
-        env:
-          REVIEW_SYNC_URL: ${{ secrets.REVIEW_SYNC_URL }}
+      - name: Trigger async sync
         run: |
-          if [ -z "$REVIEW_SYNC_URL" ]; then
-            echo "Missing secret: REVIEW_SYNC_URL"
-            exit 1
-          fi
-          curl --fail --show-error --silent "$REVIEW_SYNC_URL"
+          curl -X POST --fail --show-error --silent \
+          "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/async?asin=${{ matrix.asin }}&mode=full&translate_mode=full"
