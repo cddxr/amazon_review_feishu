@@ -21,4 +21,4 @@ jobs:
       - name: Trigger async sync
         run: |
           curl -X POST --fail --show-error --silent \
-          "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/async?asin=${{ matrix.asin }}&mode=full&translate_mode=full"
+          "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/async?asin=${{ matrix.asin }}&mode=max&translate_mode=full"
