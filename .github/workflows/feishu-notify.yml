@@ -39,6 +39,7 @@ jobs:
         run: |
           python - << 'PY'
           import json
+          import re
           from datetime import datetime
 
           NAME_TO_ASIN = {
@@ -60,6 +61,14 @@ jobs:
           lines = []
           idx = 0
 
+          def normalize_review_count(text):
+              if not text:
+                  return "N/A"
+              m = re.search(r"([\d,]+)", str(text))
+              if not m:
+                  return "N/A"
+              return m.group(1).replace(",", "")
+
           for name, asin in NAME_TO_ASIN.items():
               idx += 1
               rating_item = by_asin_rating.get(asin, {})
@@ -67,11 +76,12 @@ jobs:
 
               rating_value = rating_item.get("rating_value", "N/A")
               reviews_raw = rating_item.get("reviews_raw", "N/A")
-              current_total = new_item.get("current_total", reviews_raw)
+              reviews_count = normalize_review_count(reviews_raw)
+              current_total = new_item.get("current_total", reviews_count)
               new_count = int(new_item.get("new_count", 0) or 0)
 
               lines.append(f"{idx}.{name}: {asin}")
-              lines.append(f"rating: {rating_value}")
+              lines.append(f"rating: {rating_value}/{reviews_count}")
               lines.append(f"review: {current_total}")
 
               if new_count > 0:

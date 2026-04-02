@@ -9,6 +9,7 @@ from review_incremental_only_new import create_supabase_client
 import traceback
 import os
 from datetime import datetime, timezone
+from datetime import timedelta
 from uuid import uuid4
 
 load_dotenv()
@@ -216,30 +217,42 @@ def get_asins_with_new_reviews(
                 if not asin:
                     continue
 
-                state_res = (
-                    supabase.table("review_sync_state")
-                    .select("last_scraped_at")
-                    .eq("asin", asin)
-                    .limit(1)
-                    .execute()
-                )
-                state_rows = state_res.data or []
-                if not state_rows:
+                run_created_at = item.get("created_at")
+                if not run_created_at:
                     continue
 
-                last_scraped_at = state_rows[0].get("last_scraped_at")
-                if not last_scraped_at:
+                try:
+                    run_dt = datetime.fromisoformat(run_created_at.replace("Z", "+00:00"))
+                except Exception:
                     continue
+
+                # Pull review samples around the successful run time to avoid
+                # being overwritten by later no-new runs.
+                start_iso = (run_dt - timedelta(minutes=30)).isoformat()
+                end_iso = (run_dt + timedelta(minutes=30)).isoformat()
 
                 reviews_res = (
                     supabase.table("reviews")
                     .select("title,title_zh,text,text_zh,scraped_at")
                     .eq("asin", asin)
-                    .eq("scraped_at", last_scraped_at)
+                    .gte("scraped_at", start_iso)
+                    .lte("scraped_at", end_iso)
+                    .order("scraped_at", desc=True)
                     .limit(sample_size)
                     .execute()
                 )
                 review_rows = reviews_res.data or []
+                if not review_rows:
+                    # Fallback: latest samples for this ASIN
+                    reviews_res = (
+                        supabase.table("reviews")
+                        .select("title,title_zh,text,text_zh,scraped_at")
+                        .eq("asin", asin)
+                        .order("scraped_at", desc=True)
+                        .limit(sample_size)
+                        .execute()
+                    )
+                    review_rows = reviews_res.data or []
                 item["new_reviews_sample"] = review_rows
 
         return {
