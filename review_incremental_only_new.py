@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-评论增量抓取 + Supabase 入库版
+璇勮澧為噺鎶撳彇 + Supabase 鍏ュ簱鐗?
 
-逻辑：
-1. 第一次运行：抓取当前全部评论，作为初始化基线，全部写入 Supabase
-2. 后续运行：只识别新增评论，只把新增评论写入 Supabase
-3. review_sync_state 表用于记录每个 ASIN 的同步状态
-4. reviews 表用于保存评论明细
+閫昏緫锛?
+1. 绗竴娆¤繍琛岋細鎶撳彇褰撳墠鍏ㄩ儴璇勮锛屼綔涓哄垵濮嬪寲鍩虹嚎锛屽叏閮ㄥ啓鍏?Supabase
+2. 鍚庣画杩愯锛氬彧璇嗗埆鏂板璇勮锛屽彧鎶婃柊澧炶瘎璁哄啓鍏?Supabase
+3. review_sync_state 琛ㄧ敤浜庤褰曟瘡涓?ASIN 鐨勫悓姝ョ姸鎬?
+4. reviews 琛ㄧ敤浜庝繚瀛樿瘎璁烘槑缁?
 """
 
 import json
@@ -35,12 +35,13 @@ BASE_URL = "https://www.woot.com/review/Reviews/"
 SUPABASE_PAGE_SIZE = 1000
 UPSERT_BATCH_SIZE = 200
 STATE_REVIEW_KEYS_LIMIT = 200
+HTTP_RETRIES = 4
 
 
 def get_env(name: str, required: bool = True, default: str | None = None) -> str | None:
     value = os.getenv(name, default)
     if required and not value:
-        raise RuntimeError(f"缺少环境变量: {name}")
+        raise RuntimeError(f"缂哄皯鐜鍙橀噺: {name}")
     return value
 
 
@@ -124,7 +125,7 @@ def translate_unique_texts(texts, target_lang="zh-CN", max_workers=3):
     return translated_map
 
 
-def fetch_reviews(asin: str, filter_val=0, sort_val=0, delay=0.2):
+def fetch_reviews(asin: str, filter_val=0, sort_val=0, is_verified=False, delay=0.2):
     url_base = BASE_URL + asin
     reviews = []
     paging_next = None
@@ -132,7 +133,7 @@ def fetch_reviews(asin: str, filter_val=0, sort_val=0, delay=0.2):
     while True:
         params = {
             "filter": str(filter_val),
-            "isVerified": "false",
+            "isVerified": "true" if is_verified else "false",
             "sort": str(sort_val),
         }
 
@@ -145,12 +146,20 @@ def fetch_reviews(asin: str, filter_val=0, sort_val=0, delay=0.2):
         headers = {**HEADERS, "Referer": f"https://www.woot.com/review/{asin}"}
         req = urllib.request.Request(url, headers=headers)
 
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode())
-        except Exception as e:
-            print(f"[{asin}] 请求失败: {e}")
-            break
+        data = None
+        for attempt in range(HTTP_RETRIES):
+            try:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    data = json.loads(resp.read().decode())
+                break
+            except Exception as e:
+                if attempt == HTTP_RETRIES - 1:
+                    print(
+                        f"[{asin}] request failed filter={filter_val} sort={sort_val} "
+                        f"isVerified={is_verified} error={e}"
+                    )
+                    return reviews
+                time.sleep(0.8 * (attempt + 1))
 
         batch = data.get("Reviews", [])
         if not batch:
@@ -183,13 +192,19 @@ def scrape_full(asin: str):
     seen = set()
     unique = []
 
-    for star in [5, 4, 3, 2, 1]:
-        revs = fetch_reviews(asin, filter_val=star, sort_val=0)
-        for review in revs:
-            key = review_key(review)
-            if key not in seen:
-                seen.add(key)
-                unique.append(review)
+    for is_verified in [False, True]:
+        for star in [0, 5, 4, 3, 2, 1]:
+            revs = fetch_reviews(
+                asin,
+                filter_val=star,
+                sort_val=0,
+                is_verified=is_verified,
+            )
+            for review in revs:
+                key = review_key(review)
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(review)
 
     return unique
 
@@ -198,14 +213,21 @@ def scrape_max(asin: str):
     seen = set()
     unique = []
 
-    for star in [5, 4, 3, 2, 1]:
-        for sort_val in [0, 1, 2, 3]:
-            revs = fetch_reviews(asin, filter_val=star, sort_val=sort_val, delay=0.15)
-            for review in revs:
-                key = review_key(review)
-                if key not in seen:
-                    seen.add(key)
-                    unique.append(review)
+    for is_verified in [False, True]:
+        for star in [0, 5, 4, 3, 2, 1]:
+            for sort_val in [0, 1, 2, 3]:
+                revs = fetch_reviews(
+                    asin,
+                    filter_val=star,
+                    sort_val=sort_val,
+                    is_verified=is_verified,
+                    delay=0.12,
+                )
+                for review in revs:
+                    key = review_key(review)
+                    if key not in seen:
+                        seen.add(key)
+                        unique.append(review)
 
     return unique
 
@@ -360,8 +382,8 @@ def incremental_update(
     sample_size: int = 5,
 ):
     """
-    第一次运行：全部写入
-    后续运行：只追加新增评论
+    绗竴娆¤繍琛岋細鍏ㄩ儴鍐欏叆
+    鍚庣画杩愯锛氬彧杩藉姞鏂板璇勮
     """
     old_keys = get_existing_review_keys(supabase, asin)
 
@@ -428,9 +450,9 @@ def run_once(
     asin = asin.strip().upper()
     supabase = create_supabase_client()
 
-    print(f"开始抓取 ASIN: {asin}")
+    print(f"寮€濮嬫姄鍙?ASIN: {asin}")
     reviews = get_reviews_by_mode(asin, mode=mode)
-    print(f"抓取完成，当前总评论数: {len(reviews)}")
+    print(f"鎶撳彇瀹屾垚锛屽綋鍓嶆€昏瘎璁烘暟: {len(reviews)}")
 
     try:
         result = incremental_update(
@@ -478,3 +500,4 @@ if __name__ == "__main__":
         mode=MODE,
         translate_mode=TRANSLATE_MODE,
     )
+
