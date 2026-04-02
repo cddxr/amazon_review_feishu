@@ -286,7 +286,11 @@ def upsert_reviews(supabase: Client, rows: list[dict]):
         chunk = rows[i:i + UPSERT_BATCH_SIZE]
         (
             supabase.table("reviews")
-            .upsert(chunk, on_conflict="asin,review_key")
+            .upsert(
+                chunk,
+                on_conflict="asin,review_key",
+                ignore_duplicates=True,
+            )
             .execute()
         )
         total += len(chunk)
