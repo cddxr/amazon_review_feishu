@@ -1,0 +1,21 @@
+name: Review Sync Scheduler
+
+on:
+  schedule:
+    # Every 6 hours (UTC)
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call review sync API
+        env:
+          REVIEW_SYNC_URL: ${{ secrets.REVIEW_SYNC_URL }}
+        run: |
+          if [ -z "$REVIEW_SYNC_URL" ]; then
+            echo "Missing secret: REVIEW_SYNC_URL"
+            exit 1
+          fi
+          curl --fail --show-error --silent "$REVIEW_SYNC_URL"

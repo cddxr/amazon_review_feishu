@@ -35,6 +35,15 @@ def reviews_sync(
     mode: str = Query("max", description="basic / full / max"),
     translate_mode: str = Query("full", description="none / title / full"),
 ):
+    missing = [k for k in ("SUPABASE_URL", "SUPABASE_KEY") if not os.getenv(k)]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Missing required environment variables",
+                "missing": missing,
+            },
+        )
     try:
         return run_once(asin=asin, mode=mode, translate_mode=translate_mode)
     except Exception as e:
