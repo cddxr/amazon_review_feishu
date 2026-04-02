@@ -183,6 +183,8 @@ def get_sync_task(task_id: str):
 def get_asins_with_new_reviews(
     limit: int = Query(100, ge=1, le=500, description="Max runs to scan"),
     hours: int = Query(24, ge=1, le=168, description="Look-back window in hours"),
+    include_content: bool = Query(True, description="Include sample new review content"),
+    sample_size: int = Query(2, ge=1, le=5, description="Sample new reviews per ASIN"),
 ):
     ensure_required_env()
     try:
@@ -205,10 +207,45 @@ def get_asins_with_new_reviews(
             asin = row.get("asin")
             if asin and asin not in latest_by_asin:
                 latest_by_asin[asin] = row
+        items = list(latest_by_asin.values())
+
+        if include_content:
+            for item in items:
+                asin = item.get("asin")
+                item["new_reviews_sample"] = []
+                if not asin:
+                    continue
+
+                state_res = (
+                    supabase.table("review_sync_state")
+                    .select("last_scraped_at")
+                    .eq("asin", asin)
+                    .limit(1)
+                    .execute()
+                )
+                state_rows = state_res.data or []
+                if not state_rows:
+                    continue
+
+                last_scraped_at = state_rows[0].get("last_scraped_at")
+                if not last_scraped_at:
+                    continue
+
+                reviews_res = (
+                    supabase.table("reviews")
+                    .select("title,title_zh,text,text_zh,scraped_at")
+                    .eq("asin", asin)
+                    .eq("scraped_at", last_scraped_at)
+                    .limit(sample_size)
+                    .execute()
+                )
+                review_rows = reviews_res.data or []
+                item["new_reviews_sample"] = review_rows
+
         return {
             "count": len(latest_by_asin),
             "hours": hours,
-            "asins_with_new_reviews": list(latest_by_asin.values()),
+            "asins_with_new_reviews": items,
         }
     except Exception as e:
         raise HTTPException(

@@ -24,30 +24,28 @@ PRODUCTS = {
 
 WAIT_LONG = 25
 WAIT_SHORT = 8
+RETRIES_PER_ASIN = 3
 
 
 def build_driver() -> webdriver.Chrome:
-    """
-    Read local browser config from env vars:
-    - CHROMEDRIVER_PATH (required)
-    - CHROME_BINARY (optional)
-    """
-    chrome_driver_path = os.getenv("CHROMEDRIVER_PATH", "").strip()
-    if not chrome_driver_path:
-        raise RuntimeError("Missing env CHROMEDRIVER_PATH")
-
     options = Options()
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
 
     chrome_binary = os.getenv("CHROME_BINARY", "").strip()
     if chrome_binary:
         options.binary_location = chrome_binary
 
-    return webdriver.Chrome(service=Service(chrome_driver_path), options=options)
+    chrome_driver_path = os.getenv("CHROMEDRIVER_PATH", "").strip()
+    if chrome_driver_path:
+        return webdriver.Chrome(service=Service(chrome_driver_path), options=options)
+
+    # Fallback: use Selenium Manager (works in many CI environments).
+    return webdriver.Chrome(options=options)
 
 
 def set_amazon_zipcode(driver: webdriver.Chrome, zipcode: str = "10001") -> None:
@@ -64,7 +62,6 @@ def set_amazon_zipcode(driver: webdriver.Chrome, zipcode: str = "10001") -> None
     )
     zip_input.clear()
     zip_input.send_keys(zipcode)
-
     driver.find_element(By.ID, "GLUXZipUpdate").click()
 
     try:
@@ -72,8 +69,28 @@ def set_amazon_zipcode(driver: webdriver.Chrome, zipcode: str = "10001") -> None
         driver.find_element(By.NAME, "glowDoneButton").click()
     except Exception:
         pass
-
     time.sleep(2)
+
+
+def handle_continue_pages(driver: webdriver.Chrome) -> None:
+    # Handle common interstitial pages without failing the run.
+    for _ in range(2):
+        try:
+            buttons = driver.find_elements(
+                By.XPATH,
+                "//button[contains(., 'Continue')] | //a[contains(., 'Continue')]",
+            )
+            clicked = False
+            for btn in buttons:
+                if btn.is_displayed():
+                    btn.click()
+                    clicked = True
+                    time.sleep(1)
+                    break
+            if not clicked:
+                break
+        except Exception:
+            break
 
 
 def find_text(driver: webdriver.Chrome, selectors: list[tuple[str, str]]) -> str:
@@ -98,6 +115,13 @@ def parse_first_number(text: str) -> str:
 def scrape_rating_and_reviews(driver: webdriver.Chrome, asin: str) -> dict:
     url = f"https://www.amazon.com/dp/{asin}"
     driver.get(url)
+    time.sleep(1)
+    handle_continue_pages(driver)
+
+    # If amazon bot challenge appears, surface explicit error.
+    page_src = (driver.page_source or "").lower()
+    if "enter the characters you see below" in page_src:
+        raise RuntimeError("Amazon anti-bot challenge detected")
 
     rating_text = find_text(
         driver,
@@ -123,11 +147,21 @@ def scrape_rating_and_reviews(driver: webdriver.Chrome, asin: str) -> dict:
     }
 
 
-def build_report_line(name: str, info: dict) -> str:
-    return (
-        f"{name} ({info['asin']}): "
-        f"rating={info['rating_value']}, reviews={info['reviews_raw']}"
-    )
+def scrape_with_retry(driver: webdriver.Chrome, asin: str) -> dict:
+    last_error = None
+    for attempt in range(RETRIES_PER_ASIN):
+        try:
+            return scrape_rating_and_reviews(driver, asin)
+        except Exception as e:
+            last_error = str(e)
+            time.sleep(1.5 * (attempt + 1))
+    return {
+        "asin": asin,
+        "rating_raw": "未找到",
+        "rating_value": "未找到",
+        "reviews_raw": "未找到",
+        "error": last_error or "unknown error",
+    }
 
 
 def main():
@@ -136,18 +170,15 @@ def main():
         zipcode = os.getenv("AMAZON_ZIPCODE", "10001")
         set_amazon_zipcode(driver, zipcode=zipcode)
 
-        results = []
-        lines = [f"Amazon rating snapshot @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
+        items = []
         for name, asin in PRODUCTS.items():
-            info = scrape_rating_and_reviews(driver, asin)
-            results.append({"name": name, **info})
-            lines.append(build_report_line(name, info))
+            result = scrape_with_retry(driver, asin)
+            items.append({"name": name, **result})
 
         output = {
             "timestamp": datetime.now().isoformat(),
             "zipcode": zipcode,
-            "items": results,
-            "text_summary": "\n".join(lines),
+            "items": items,
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
     finally:

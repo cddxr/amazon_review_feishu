@@ -11,39 +11,90 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install selenium
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium
+
+      - name: Fetch rating/review snapshot
+        run: |
+          python amazon_rating_only_selenium.py > rating.json
+
       - name: Fetch new-review summary
         run: |
-          curl -sS "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/runs/new?limit=200" -o summary.json
+          curl -sS "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/runs/new?hours=24&limit=200&include_content=true&sample_size=2" -o summary.json
 
-      - name: Build message
+      - name: Build Feishu payload
         run: |
           python - << 'PY'
           import json
+          from datetime import datetime
 
-          with open("summary.json", "r", encoding="utf-8") as f:
-              data = json.load(f)
-
-          items = data.get("asins_with_new_reviews", [])
-          if not items:
-              text = "今日评论新增：0（无新增）"
-          else:
-              lines = ["今日评论新增汇总："]
-              for item in items:
-                  asin = item.get("asin", "")
-                  new_count = item.get("new_count", 0)
-                  total = item.get("current_total", 0)
-                  lines.append(f"- {asin}: +{new_count}（总量 {total}）")
-              text = "\n".join(lines)
-
-          payload = {
-              "msg_type": "text",
-              "content": {"text": text},
+          NAME_TO_ASIN = {
+              "VP203": "B0DDCJFFBM",
+              "VP204": "B0DFBMVX7T",
+              "VP218": "B0F8HXNY5N",
+              "XG001": "B0G64PSMX4",
           }
+
+          with open("rating.json", "r", encoding="utf-8") as f:
+              rating_data = json.load(f)
+          with open("summary.json", "r", encoding="utf-8") as f:
+              summary_data = json.load(f)
+
+          by_asin_rating = {item.get("asin"): item for item in rating_data.get("items", [])}
+          by_asin_new = {item.get("asin"): item for item in summary_data.get("asins_with_new_reviews", [])}
+
+          title = f"{datetime.now().strftime('%Y-%m-%d')} Review Delta Daily"
+          lines = []
+          idx = 0
+
+          for name, asin in NAME_TO_ASIN.items():
+              idx += 1
+              rating_item = by_asin_rating.get(asin, {})
+              new_item = by_asin_new.get(asin, {})
+
+              rating_value = rating_item.get("rating_value", "N/A")
+              reviews_raw = rating_item.get("reviews_raw", "N/A")
+              current_total = new_item.get("current_total", reviews_raw)
+              new_count = int(new_item.get("new_count", 0) or 0)
+
+              lines.append(f"{idx}.{name}: {asin}")
+              lines.append(f"rating: {rating_value}")
+              lines.append(f"review: {current_total}")
+
+              if new_count > 0:
+                  lines.append(f"new_count: {new_count}")
+                  samples = new_item.get("new_reviews_sample", [])
+                  if samples:
+                      lines.append("new_content:")
+                      for s in samples:
+                          zh = (s.get("text_zh") or "").strip()
+                          en = (s.get("text") or "").strip()
+                          if zh:
+                              lines.append(f"zh: {zh[:200]}")
+                          if en:
+                              lines.append(f"en: {en[:200]}")
+              lines.append("")
+
+          summary = "\n".join(lines).strip()
+          payload = {"title": title, "summary": summary}
           with open("payload.json", "w", encoding="utf-8") as f:
               json.dump(payload, f, ensure_ascii=False)
           PY
 
-      - name: Send to Feishu
+      - name: Send to Feishu webhook
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
         run: |
