@@ -15,6 +15,7 @@ import os
 import time
 import urllib.parse
 import urllib.request
+import html
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -53,17 +54,35 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def translate_text(text: str, target_lang: str = "zh-CN") -> str:
-    try:
-        if not text:
-            return ""
-        translated = GoogleTranslator(source="auto", target=target_lang).translate(text)
-        return translated or ""
-    except Exception:
-        return text
+def translate_text(
+    text: str,
+    target_lang: str = "zh-CN",
+    retries: int = 5,
+    retry_delay: float = 0.8,
+) -> str:
+    if not text:
+        return ""
+
+    source_text = html.unescape(str(text))
+    last_error = None
+    for attempt in range(retries):
+        try:
+            translated = GoogleTranslator(source="auto", target=target_lang).translate(source_text)
+            if translated is None:
+                raise RuntimeError("translator returned null")
+            translated = str(translated).strip()
+            if not translated:
+                raise RuntimeError("translator returned empty")
+            return translated
+        except Exception as e:
+            last_error = e
+            if attempt < retries - 1:
+                time.sleep(retry_delay * (attempt + 1))
+
+    raise RuntimeError(f"translate failed after {retries} retries: {last_error}")
 
 
-def translate_unique_texts(texts, target_lang="zh-CN", max_workers=4):
+def translate_unique_texts(texts, target_lang="zh-CN", max_workers=3):
     unique_texts = []
     seen = set()
 
@@ -79,6 +98,7 @@ def translate_unique_texts(texts, target_lang="zh-CN", max_workers=4):
         return translated_map
 
     worker_count = min(max_workers, max(1, len(unique_texts)))
+    failures = []
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_to_text = {
             executor.submit(translate_text, text, target_lang): text
@@ -88,8 +108,13 @@ def translate_unique_texts(texts, target_lang="zh-CN", max_workers=4):
             source_text = future_to_text[future]
             try:
                 translated_map[source_text] = future.result()
-            except Exception:
-                translated_map[source_text] = source_text
+            except Exception as e:
+                failures.append({"text": source_text[:120], "error": str(e)})
+
+    if failures:
+        raise RuntimeError(
+            f"translation failed for {len(failures)} texts, sample={failures[:3]}"
+        )
 
     return translated_map
 
@@ -194,17 +219,17 @@ def translate_reviews_inplace(reviews: list, translate_mode: str = "none", targe
         translate_mode = "none"
 
     if translate_mode in {"title", "full"}:
-        titles = [str(r.get("Title", "") or "") for r in reviews]
+        titles = [html.unescape(str(r.get("Title", "") or "")) for r in reviews]
         title_map = translate_unique_texts(titles, target_lang=target_lang)
         for r in reviews:
-            src = str(r.get("Title", "") or "")
+            src = html.unescape(str(r.get("Title", "") or ""))
             r["Title_zh"] = title_map.get(src, src) or ""
 
     if translate_mode == "full":
-        texts = [str(r.get("Text", "") or "") for r in reviews]
+        texts = [html.unescape(str(r.get("Text", "") or "")) for r in reviews]
         text_map = translate_unique_texts(texts, target_lang=target_lang)
         for r in reviews:
-            src = str(r.get("Text", "") or "")
+            src = html.unescape(str(r.get("Text", "") or ""))
             r["Text_zh"] = text_map.get(src, src) or ""
 
     return reviews
