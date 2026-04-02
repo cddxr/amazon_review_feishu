@@ -29,7 +29,7 @@ jobs:
 
       - name: Fetch rating/review snapshot
         run: |
-          python amazon_rating_only_selenium.py > rating.json
+          python amazon_rating_only_selenium.py > rating.json || echo "{\"items\": []}" > rating.json
 
       - name: Fetch new-review summary
         run: |
