@@ -64,6 +64,11 @@ def translate_text(
         return ""
 
     source_text = html.unescape(str(text))
+    # Skip translation for symbol-only payloads (emoji/garbled symbols).
+    # Translators often return null for these and should not fail the whole task.
+    if not any(ch.isalpha() for ch in source_text):
+        return source_text
+
     last_error = None
     for attempt in range(retries):
         try:
