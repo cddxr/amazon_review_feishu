@@ -5,6 +5,7 @@ from fastapi import BackgroundTasks, FastAPI, Query
 from fastapi import HTTPException
 from dotenv import load_dotenv
 from review_incremental_supabase import run_once
+from review_incremental_only_new import create_supabase_client
 import traceback
 import os
 from datetime import datetime, timezone
@@ -134,3 +135,40 @@ def get_sync_task(task_id: str):
     if not task:
         raise HTTPException(status_code=404, detail={"error": "Task not found"})
     return task
+
+
+@app.get("/reviews/sync/runs/new")
+def get_asins_with_new_reviews(
+    limit: int = Query(100, ge=1, le=500, description="Max runs to scan"),
+):
+    ensure_required_env()
+    try:
+        supabase = create_supabase_client()
+        result = (
+            supabase.table("review_sync_runs")
+            .select("asin,new_count,current_total,mode,translate_mode,created_at,status")
+            .eq("status", "success")
+            .gt("new_count", 0)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = result.data or []
+        latest_by_asin = {}
+        for row in rows:
+            asin = row.get("asin")
+            if asin and asin not in latest_by_asin:
+                latest_by_asin[asin] = row
+        return {
+            "count": len(latest_by_asin),
+            "asins_with_new_reviews": list(latest_by_asin.values()),
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": str(e),
+                "type": e.__class__.__name__,
+                "trace": traceback.format_exc(),
+            },
+        )
