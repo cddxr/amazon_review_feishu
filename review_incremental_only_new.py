@@ -326,10 +326,35 @@ def upsert_sync_state(
     )
 
 
+def insert_sync_run(
+    supabase: Client,
+    asin: str,
+    mode: str,
+    translate_mode: str,
+    current_total: int,
+    new_count: int,
+    upserted_rows: int,
+    status: str = "success",
+    error: str | None = None,
+):
+    payload = {
+        "asin": asin,
+        "mode": mode,
+        "translate_mode": translate_mode,
+        "current_total": current_total,
+        "new_count": new_count,
+        "upserted_rows": upserted_rows,
+        "status": status,
+        "error": error or "",
+    }
+    return supabase.table("review_sync_runs").insert(payload).execute()
+
+
 def incremental_update(
     supabase: Client,
     asin: str,
     current_reviews: list,
+    mode: str = "max",
     translate_mode: str = "none",
     include_reviews: bool = False,
     sample_size: int = 5,
@@ -367,6 +392,19 @@ def incremental_update(
         new_count=len(new_reviews),
         scraped_at=scraped_at,
     )
+    try:
+        insert_sync_run(
+            supabase=supabase,
+            asin=asin,
+            mode=mode,
+            translate_mode=translate_mode,
+            current_total=len(current_reviews),
+            new_count=len(new_reviews),
+            upserted_rows=(upsert_result or {}).get("upserted_rows", 0),
+            status="success",
+        )
+    except Exception as log_err:
+        print(f"[{asin}] failed to write review_sync_runs log: {log_err}")
 
     result = {
         "asin": asin,
@@ -394,13 +432,32 @@ def run_once(
     reviews = get_reviews_by_mode(asin, mode=mode)
     print(f"抓取完成，当前总评论数: {len(reviews)}")
 
-    result = incremental_update(
-        supabase=supabase,
-        asin=asin,
-        current_reviews=reviews,
-        translate_mode=translate_mode,
-        include_reviews=include_reviews,
-    )
+    try:
+        result = incremental_update(
+            supabase=supabase,
+            asin=asin,
+            current_reviews=reviews,
+            mode=mode,
+            translate_mode=translate_mode,
+            include_reviews=include_reviews,
+        )
+    except Exception as e:
+        # Best effort: keep a failed run log for observability.
+        try:
+            insert_sync_run(
+                supabase=supabase,
+                asin=asin,
+                mode=mode,
+                translate_mode=translate_mode,
+                current_total=len(reviews),
+                new_count=0,
+                upserted_rows=0,
+                status="failed",
+                error=str(e),
+            )
+        except Exception as log_err:
+            print(f"[{asin}] failed to write review_sync_runs log: {log_err}")
+        raise
 
     print(json.dumps({
         "asin": result["asin"],
