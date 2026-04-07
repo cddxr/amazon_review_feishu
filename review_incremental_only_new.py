@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-璇勮澧為噺鎶撳彇 + Supabase 鍏ュ簱鐗?
+评论增量抓取 + Supabase 入库（Microsoft Translator 稳定版）
 
-閫昏緫锛?
-1. 绗竴娆¤繍琛岋細鎶撳彇褰撳墠鍏ㄩ儴璇勮锛屼綔涓哄垵濮嬪寲鍩虹嚎锛屽叏閮ㄥ啓鍏?Supabase
-2. 鍚庣画杩愯锛氬彧璇嗗埆鏂板璇勮锛屽彧鎶婃柊澧炶瘎璁哄啓鍏?Supabase
-3. review_sync_state 琛ㄧ敤浜庤褰曟瘡涓?ASIN 鐨勫悓姝ョ姸鎬?
-4. reviews 琛ㄧ敤浜庝繚瀛樿瘎璁烘槑缁?
+功能说明：
+1. 第一次运行：抓取当前全部评论，作为初始化基线，并写入 Supabase
+2. 后续运行：只识别新增评论，只把新增评论写入 Supabase
+3. review_sync_state 表用于记录每个 ASIN 的同步状态
+4. reviews 表用于保存评论明细
+5. 支持标题 + 正文完整翻译（TRANSLATE_MODE=full）
+6. 使用 Microsoft Translator 官方接口，更稳定
+
+环境变量：
+- SUPABASE_URL
+- SUPABASE_KEY
+- AZURE_TRANSLATOR_KEY
+- AZURE_TRANSLATOR_REGION
+- AZURE_TRANSLATOR_ENDPOINT（可选，默认 https://api.cognitive.microsofttranslator.com）
+- ASIN（可选）
+- MODE（可选，默认 max）
+- TRANSLATE_MODE（可选，默认 full）
 """
 
 import json
@@ -17,9 +29,9 @@ import urllib.parse
 import urllib.request
 import html
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
-from deep_translator import GoogleTranslator
+import requests
 from supabase import create_client, Client
 
 
@@ -37,11 +49,82 @@ UPSERT_BATCH_SIZE = 200
 STATE_REVIEW_KEYS_LIMIT = 200
 HTTP_RETRIES = 4
 
+# ===== 微软翻译配置 =====
+TRANSLATION_BATCH_SIZE = 20
+TRANSLATION_RETRIES = 5
+TRANSLATION_RETRY_DELAY = 1.5
+TRANSLATION_REQUEST_TIMEOUT = 30
+TRANSLATION_REQUEST_INTERVAL = 0.3
+DEFAULT_TARGET_LANG = "zh-Hans"
+
+
+class MicrosoftTranslator:
+    def __init__(self):
+        self.key = get_env("AZURE_TRANSLATOR_KEY")
+        self.region = get_env("AZURE_TRANSLATOR_REGION")
+        self.endpoint = get_env(
+            "AZURE_TRANSLATOR_ENDPOINT",
+            required=False,
+            default="https://api.cognitive.microsofttranslator.com",
+        ).rstrip("/")
+        self.url = f"{self.endpoint}/translate"
+
+    def translate_batch(
+        self,
+        texts: list[str],
+        target_lang: str = DEFAULT_TARGET_LANG,
+        source_lang: Optional[str] = None,
+    ) -> list[str]:
+        if not texts:
+            return []
+
+        params = {
+            "api-version": "3.0",
+            "to": target_lang,
+        }
+        if source_lang:
+            params["from"] = source_lang
+
+        headers = {
+            "Ocp-Apim-Subscription-Key": self.key,
+            "Ocp-Apim-Subscription-Region": self.region,
+            "Content-Type": "application/json",
+        }
+        body = [{"text": text} for text in texts]
+
+        last_error = None
+        for attempt in range(TRANSLATION_RETRIES):
+            try:
+                response = requests.post(
+                    self.url,
+                    params=params,
+                    headers=headers,
+                    json=body,
+                    timeout=TRANSLATION_REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                results = []
+                for item in data:
+                    translations = item.get("translations", [])
+                    if not translations:
+                        results.append("")
+                    else:
+                        results.append(str(translations[0].get("text", "")).strip())
+                return results
+            except Exception as e:
+                last_error = e
+                if attempt < TRANSLATION_RETRIES - 1:
+                    time.sleep(TRANSLATION_RETRY_DELAY * (attempt + 1))
+
+        raise RuntimeError(f"Microsoft translation failed after {TRANSLATION_RETRIES} retries: {last_error}")
+
 
 def get_env(name: str, required: bool = True, default: str | None = None) -> str | None:
     value = os.getenv(name, default)
     if required and not value:
-        raise RuntimeError(f"缂哄皯鐜鍙橀噺: {name}")
+        raise RuntimeError(f"缺少环境变量: {name}")
     return value
 
 
@@ -53,76 +136,6 @@ def create_supabase_client() -> Client:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def translate_text(
-    text: str,
-    target_lang: str = "zh-CN",
-    retries: int = 5,
-    retry_delay: float = 0.8,
-) -> str:
-    if not text:
-        return ""
-
-    source_text = html.unescape(str(text))
-    # Skip translation for symbol-only payloads (emoji/garbled symbols).
-    # Translators often return null for these and should not fail the whole task.
-    if not any(ch.isalpha() for ch in source_text):
-        return source_text
-
-    last_error = None
-    for attempt in range(retries):
-        try:
-            translated = GoogleTranslator(source="auto", target=target_lang).translate(source_text)
-            if translated is None:
-                raise RuntimeError("translator returned null")
-            translated = str(translated).strip()
-            if not translated:
-                raise RuntimeError("translator returned empty")
-            return translated
-        except Exception as e:
-            last_error = e
-            if attempt < retries - 1:
-                time.sleep(retry_delay * (attempt + 1))
-
-    raise RuntimeError(f"translate failed after {retries} retries: {last_error}")
-
-
-def translate_unique_texts(texts, target_lang="zh-CN", max_workers=3):
-    unique_texts = []
-    seen = set()
-
-    for text in texts:
-        if not text:
-            continue
-        if text not in seen:
-            seen.add(text)
-            unique_texts.append(text)
-
-    translated_map = {}
-    if not unique_texts:
-        return translated_map
-
-    worker_count = min(max_workers, max(1, len(unique_texts)))
-    failures = []
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_text = {
-            executor.submit(translate_text, text, target_lang): text
-            for text in unique_texts
-        }
-        for future in as_completed(future_to_text):
-            source_text = future_to_text[future]
-            try:
-                translated_map[source_text] = future.result()
-            except Exception as e:
-                failures.append({"text": source_text[:120], "error": str(e)})
-
-    if failures:
-        raise RuntimeError(
-            f"translation failed for {len(failures)} texts, sample={failures[:3]}"
-        )
-
-    return translated_map
 
 
 def fetch_reviews(asin: str, filter_val=0, sort_val=0, is_verified=False, delay=0.2):
@@ -241,23 +254,81 @@ def get_reviews_by_mode(asin: str, mode: str = "max"):
     return scrape_max(asin)
 
 
-def translate_reviews_inplace(reviews: list, translate_mode: str = "none", target_lang="zh-CN"):
+def normalize_text(value) -> str:
+    if value is None:
+        return ""
+    return html.unescape(str(value)).strip()
+
+
+def translate_unique_texts(
+    texts: list[str],
+    translator: MicrosoftTranslator,
+    target_lang: str = DEFAULT_TARGET_LANG,
+    batch_size: int = TRANSLATION_BATCH_SIZE,
+) -> dict[str, str]:
+    unique_texts = []
+    seen = set()
+
+    for text in texts:
+        text = normalize_text(text)
+        if not text:
+            continue
+        if not any(ch.isalpha() for ch in text):
+            continue
+        if text not in seen:
+            seen.add(text)
+            unique_texts.append(text)
+
+    translated_map = {}
+    if not unique_texts:
+        return translated_map
+
+    for i in range(0, len(unique_texts), batch_size):
+        chunk = unique_texts[i:i + batch_size]
+        try:
+            translated_chunk = translator.translate_batch(chunk, target_lang=target_lang)
+            for src, dst in zip(chunk, translated_chunk):
+                translated_map[src] = dst or src
+        except Exception as e:
+            print(f"translation batch failed, fallback to original text, error={e}")
+            for src in chunk:
+                translated_map[src] = src
+
+        time.sleep(TRANSLATION_REQUEST_INTERVAL)
+
+    return translated_map
+
+
+def translate_reviews_inplace(
+    reviews: list,
+    translator: MicrosoftTranslator,
+    translate_mode: str = "none",
+    target_lang: str = DEFAULT_TARGET_LANG,
+):
     if translate_mode not in {"none", "title", "full"}:
         translate_mode = "none"
 
     if translate_mode in {"title", "full"}:
-        titles = [html.unescape(str(r.get("Title", "") or "")) for r in reviews]
-        title_map = translate_unique_texts(titles, target_lang=target_lang)
+        titles = [normalize_text(r.get("Title", "")) for r in reviews]
+        title_map = translate_unique_texts(
+            titles,
+            translator=translator,
+            target_lang=target_lang,
+        )
         for r in reviews:
-            src = html.unescape(str(r.get("Title", "") or ""))
-            r["Title_zh"] = title_map.get(src, src) or ""
+            src = normalize_text(r.get("Title", ""))
+            r["Title_zh"] = title_map.get(src, src) if src else ""
 
     if translate_mode == "full":
-        texts = [html.unescape(str(r.get("Text", "") or "")) for r in reviews]
-        text_map = translate_unique_texts(texts, target_lang=target_lang)
+        texts = [normalize_text(r.get("Text", "")) for r in reviews]
+        text_map = translate_unique_texts(
+            texts,
+            translator=translator,
+            target_lang=target_lang,
+        )
         for r in reviews:
-            src = html.unescape(str(r.get("Text", "") or ""))
-            r["Text_zh"] = text_map.get(src, src) or ""
+            src = normalize_text(r.get("Text", ""))
+            r["Text_zh"] = text_map.get(src, src) if src else ""
 
     return reviews
 
@@ -376,15 +447,12 @@ def incremental_update(
     supabase: Client,
     asin: str,
     current_reviews: list,
+    translator: Optional[MicrosoftTranslator],
     mode: str = "max",
     translate_mode: str = "none",
     include_reviews: bool = False,
     sample_size: int = 5,
 ):
-    """
-    绗竴娆¤繍琛岋細鍏ㄩ儴鍐欏叆
-    鍚庣画杩愯锛氬彧杩藉姞鏂板璇勮
-    """
     old_keys = get_existing_review_keys(supabase, asin)
 
     current_key_map = {}
@@ -401,7 +469,13 @@ def incremental_update(
     new_reviews = [current_key_map[k] for k in new_keys if k in current_key_map]
 
     if translate_mode != "none" and new_reviews:
-        translate_reviews_inplace(new_reviews, translate_mode=translate_mode)
+        if translator is None:
+            raise RuntimeError("TRANSLATE_MODE 不是 none，但未初始化 Microsoft Translator")
+        translate_reviews_inplace(
+            new_reviews,
+            translator=translator,
+            translate_mode=translate_mode,
+        )
 
     scraped_at = now_iso()
     rows = to_review_rows(asin, new_reviews, scraped_at)
@@ -414,6 +488,7 @@ def incremental_update(
         new_count=len(new_reviews),
         scraped_at=scraped_at,
     )
+
     try:
         insert_sync_run(
             supabase=supabase,
@@ -444,27 +519,28 @@ def incremental_update(
 def run_once(
     asin: str,
     mode: str = "max",
-    translate_mode: str = "none",
+    translate_mode: str = "full",
     include_reviews: bool = False,
 ):
     asin = asin.strip().upper()
     supabase = create_supabase_client()
+    translator = MicrosoftTranslator() if translate_mode != "none" else None
 
-    print(f"寮€濮嬫姄鍙?ASIN: {asin}")
+    print(f"开始抓取 ASIN: {asin}")
     reviews = get_reviews_by_mode(asin, mode=mode)
-    print(f"鎶撳彇瀹屾垚锛屽綋鍓嶆€昏瘎璁烘暟: {len(reviews)}")
+    print(f"抓取完成，当前总评论数: {len(reviews)}")
 
     try:
         result = incremental_update(
             supabase=supabase,
             asin=asin,
             current_reviews=reviews,
+            translator=translator,
             mode=mode,
             translate_mode=translate_mode,
             include_reviews=include_reviews,
         )
     except Exception as e:
-        # Best effort: keep a failed run log for observability.
         try:
             insert_sync_run(
                 supabase=supabase,
@@ -485,6 +561,8 @@ def run_once(
         "asin": result["asin"],
         "current_total": result["current_total"],
         "new_count": result["new_count"],
+        "upserted_rows": result["upserted_rows"],
+        "translate_mode": translate_mode,
     }, ensure_ascii=False, indent=2))
 
     return result
@@ -500,4 +578,3 @@ if __name__ == "__main__":
         mode=MODE,
         translate_mode=TRANSLATE_MODE,
     )
-
