@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-评论增量抓取 + Supabase 入库（Microsoft Translator 稳定版）
+评论增量抓取 + Supabase 入库（DeepL 稳定版）
 
 功能说明：
 1. 第一次运行：抓取当前全部评论，作为初始化基线，并写入 Supabase
@@ -9,14 +9,12 @@
 3. review_sync_state 表用于记录每个 ASIN 的同步状态
 4. reviews 表用于保存评论明细
 5. 支持标题 + 正文完整翻译（TRANSLATE_MODE=full）
-6. 使用 Microsoft Translator 官方接口，更稳定
+6. 使用 DeepL 官方接口
 
 环境变量：
 - SUPABASE_URL
 - SUPABASE_KEY
-- AZURE_TRANSLATOR_KEY
-- AZURE_TRANSLATOR_REGION
-- AZURE_TRANSLATOR_ENDPOINT（可选，默认 https://api.cognitive.microsofttranslator.com）
+- DEEPL_API_KEY
 - ASIN（可选）
 - MODE（可选，默认 max）
 - TRANSLATE_MODE（可选，默认 full）
@@ -49,25 +47,19 @@ UPSERT_BATCH_SIZE = 200
 STATE_REVIEW_KEYS_LIMIT = 200
 HTTP_RETRIES = 4
 
-# ===== 微软翻译配置 =====
+# ===== DeepL 翻译配置 =====
 TRANSLATION_BATCH_SIZE = 20
 TRANSLATION_RETRIES = 5
 TRANSLATION_RETRY_DELAY = 1.5
 TRANSLATION_REQUEST_TIMEOUT = 30
 TRANSLATION_REQUEST_INTERVAL = 0.3
-DEFAULT_TARGET_LANG = "zh-Hans"
+DEFAULT_TARGET_LANG = "ZH"
 
 
-class MicrosoftTranslator:
+class DeepLTranslator:
     def __init__(self):
-        self.key = get_env("AZURE_TRANSLATOR_KEY")
-        self.region = get_env("AZURE_TRANSLATOR_REGION")
-        self.endpoint = get_env(
-            "AZURE_TRANSLATOR_ENDPOINT",
-            required=False,
-            default="https://api.cognitive.microsofttranslator.com",
-        ).rstrip("/")
-        self.url = f"{self.endpoint}/translate"
+        self.key = get_env("DEEPL_API_KEY")
+        self.url = "https://api-free.deepl.com/v2/translate"
 
     def translate_batch(
         self,
@@ -78,47 +70,41 @@ class MicrosoftTranslator:
         if not texts:
             return []
 
-        params = {
-            "api-version": "3.0",
-            "to": target_lang,
-        }
-        if source_lang:
-            params["from"] = source_lang
-
-        headers = {
-            "Ocp-Apim-Subscription-Key": self.key,
-            "Ocp-Apim-Subscription-Region": self.region,
-            "Content-Type": "application/json",
-        }
-        body = [{"text": text} for text in texts]
-
         last_error = None
+
         for attempt in range(TRANSLATION_RETRIES):
             try:
+                data = [
+                    ("auth_key", self.key),
+                    ("target_lang", target_lang),
+                ]
+
+                if source_lang:
+                    data.append(("source_lang", source_lang))
+
+                for text in texts:
+                    data.append(("text", text))
+
                 response = requests.post(
                     self.url,
-                    params=params,
-                    headers=headers,
-                    json=body,
+                    data=data,
                     timeout=TRANSLATION_REQUEST_TIMEOUT,
                 )
                 response.raise_for_status()
-                data = response.json()
+                result = response.json()
 
-                results = []
-                for item in data:
-                    translations = item.get("translations", [])
-                    if not translations:
-                        results.append("")
-                    else:
-                        results.append(str(translations[0].get("text", "")).strip())
-                return results
+                translations = result.get("translations", [])
+                if not isinstance(translations, list):
+                    raise RuntimeError(f"DeepL 返回格式异常: {result}")
+
+                return [str(item.get("text", "")).strip() for item in translations]
+
             except Exception as e:
                 last_error = e
                 if attempt < TRANSLATION_RETRIES - 1:
                     time.sleep(TRANSLATION_RETRY_DELAY * (attempt + 1))
 
-        raise RuntimeError(f"Microsoft translation failed after {TRANSLATION_RETRIES} retries: {last_error}")
+        raise RuntimeError(f"DeepL translation failed after {TRANSLATION_RETRIES} retries: {last_error}")
 
 
 def get_env(name: str, required: bool = True, default: str | None = None) -> str | None:
@@ -262,7 +248,7 @@ def normalize_text(value) -> str:
 
 def translate_unique_texts(
     texts: list[str],
-    translator: MicrosoftTranslator,
+    translator: DeepLTranslator,
     target_lang: str = DEFAULT_TARGET_LANG,
     batch_size: int = TRANSLATION_BATCH_SIZE,
 ) -> dict[str, str]:
@@ -301,7 +287,7 @@ def translate_unique_texts(
 
 def translate_reviews_inplace(
     reviews: list,
-    translator: MicrosoftTranslator,
+    translator: DeepLTranslator,
     translate_mode: str = "none",
     target_lang: str = DEFAULT_TARGET_LANG,
 ):
@@ -447,7 +433,7 @@ def incremental_update(
     supabase: Client,
     asin: str,
     current_reviews: list,
-    translator: Optional[MicrosoftTranslator],
+    translator: Optional[DeepLTranslator],
     mode: str = "max",
     translate_mode: str = "none",
     include_reviews: bool = False,
@@ -470,7 +456,7 @@ def incremental_update(
 
     if translate_mode != "none" and new_reviews:
         if translator is None:
-            raise RuntimeError("TRANSLATE_MODE 不是 none，但未初始化 Microsoft Translator")
+            raise RuntimeError("TRANSLATE_MODE 不是 none，但未初始化 DeepL Translator")
         translate_reviews_inplace(
             new_reviews,
             translator=translator,
@@ -524,7 +510,16 @@ def run_once(
 ):
     asin = asin.strip().upper()
     supabase = create_supabase_client()
-    translator = MicrosoftTranslator() if translate_mode != "none" else None
+
+    if translate_mode != "none":
+        try:
+            translator = DeepLTranslator()
+        except Exception as e:
+            print(f"⚠️ DeepL 未配置，自动关闭翻译，error={e}")
+            translator = None
+            translate_mode = "none"
+    else:
+        translator = None
 
     print(f"开始抓取 ASIN: {asin}")
     reviews = get_reviews_by_mode(asin, mode=mode)
