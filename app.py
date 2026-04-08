@@ -104,6 +104,7 @@ def config_check():
     ark_model = os.getenv("ARK_MODEL")
     ark_base_url = os.getenv("ARK_BASE_URL")
     return {
+        "APP_VERSION": "ark-v1",
         "SUPABASE_URL_set": bool(url),
         "SUPABASE_KEY_set": bool(key),
         "ARK_API_KEY_set": bool(ark_key),
