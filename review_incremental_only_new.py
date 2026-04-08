@@ -1,24 +1,40 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+<<<<<<< HEAD
 评论增量抓取 + Supabase 入库（火山方舟版）
+=======
+评论增量抓取 + Supabase 入库（DeepL 稳定版）
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
 
 功能说明：
 1. 第一次运行：抓取当前全部评论，作为初始化基线，并写入 Supabase
 2. 后续运行：只识别新增评论，只把新增评论写入 Supabase
 3. review_sync_state 表用于记录每个 ASIN 的同步状态
 4. reviews 表用于保存评论明细
+<<<<<<< HEAD
 5. 支持新增评论的 AI 翻译 + 语义分析（summary/tags/action_suggestions）
+=======
+5. 支持标题 + 正文完整翻译（TRANSLATE_MODE=full）
+6. 使用 DeepL 官方接口
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
 
 环境变量：
 - SUPABASE_URL
 - SUPABASE_KEY
+<<<<<<< HEAD
 - ARK_API_KEY（TRANSLATE_MODE != none 时必需）
 - ARK_MODEL（可选，默认 doubao-1-5-lite-32k-250115）
 - ARK_BASE_URL（可选，默认 https://ark.cn-beijing.volces.com/api/v3）
 - ASIN（可选）
 - MODE（可选，默认 max）
 - TRANSLATE_MODE（可选，默认 full，none/title/full）
+=======
+- DEEPL_API_KEY
+- ASIN（可选）
+- MODE（可选，默认 max）
+- TRANSLATE_MODE（可选，默认 full）
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
 """
 
 import json
@@ -49,6 +65,7 @@ UPSERT_BATCH_SIZE = 200
 STATE_REVIEW_KEYS_LIMIT = 200
 HTTP_RETRIES = 4
 
+<<<<<<< HEAD
 ARK_BASE_URL_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3"
 ARK_MODEL_DEFAULT = "doubao-1-5-lite-32k-250115"
 ARK_RETRIES = 4
@@ -228,6 +245,66 @@ text={json.dumps(text, ensure_ascii=False)}
             "tags": normalized_tags,
             "action_suggestions": normalized_suggestions,
         }
+=======
+# ===== DeepL 翻译配置 =====
+TRANSLATION_BATCH_SIZE = 20
+TRANSLATION_RETRIES = 5
+TRANSLATION_RETRY_DELAY = 1.5
+TRANSLATION_REQUEST_TIMEOUT = 30
+TRANSLATION_REQUEST_INTERVAL = 0.3
+DEFAULT_TARGET_LANG = "ZH"
+
+
+class DeepLTranslator:
+    def __init__(self):
+        self.key = get_env("DEEPL_API_KEY")
+        self.url = "https://api-free.deepl.com/v2/translate"
+
+    def translate_batch(
+        self,
+        texts: list[str],
+        target_lang: str = DEFAULT_TARGET_LANG,
+        source_lang: Optional[str] = None,
+    ) -> list[str]:
+        if not texts:
+            return []
+
+        last_error = None
+
+        for attempt in range(TRANSLATION_RETRIES):
+            try:
+                data = [
+                    ("auth_key", self.key),
+                    ("target_lang", target_lang),
+                ]
+
+                if source_lang:
+                    data.append(("source_lang", source_lang))
+
+                for text in texts:
+                    data.append(("text", text))
+
+                response = requests.post(
+                    self.url,
+                    data=data,
+                    timeout=TRANSLATION_REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
+                result = response.json()
+
+                translations = result.get("translations", [])
+                if not isinstance(translations, list):
+                    raise RuntimeError(f"DeepL 返回格式异常: {result}")
+
+                return [str(item.get("text", "")).strip() for item in translations]
+
+            except Exception as e:
+                last_error = e
+                if attempt < TRANSLATION_RETRIES - 1:
+                    time.sleep(TRANSLATION_RETRY_DELAY * (attempt + 1))
+
+        raise RuntimeError(f"DeepL translation failed after {TRANSLATION_RETRIES} retries: {last_error}")
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
 
 
 def get_env(name: str, required: bool = True, default: str | None = None) -> str | None:
@@ -369,14 +446,62 @@ def normalize_text(value) -> str:
     return html.unescape(str(value)).strip()
 
 
+<<<<<<< HEAD
 def enrich_reviews_inplace(
     reviews: list,
     processor: ArkReviewProcessor,
     translate_mode: str = "none",
+=======
+def translate_unique_texts(
+    texts: list[str],
+    translator: DeepLTranslator,
+    target_lang: str = DEFAULT_TARGET_LANG,
+    batch_size: int = TRANSLATION_BATCH_SIZE,
+) -> dict[str, str]:
+    unique_texts = []
+    seen = set()
+
+    for text in texts:
+        text = normalize_text(text)
+        if not text:
+            continue
+        if not any(ch.isalpha() for ch in text):
+            continue
+        if text not in seen:
+            seen.add(text)
+            unique_texts.append(text)
+
+    translated_map = {}
+    if not unique_texts:
+        return translated_map
+
+    for i in range(0, len(unique_texts), batch_size):
+        chunk = unique_texts[i:i + batch_size]
+        try:
+            translated_chunk = translator.translate_batch(chunk, target_lang=target_lang)
+            for src, dst in zip(chunk, translated_chunk):
+                translated_map[src] = dst or src
+        except Exception as e:
+            print(f"translation batch failed, fallback to original text, error={e}")
+            for src in chunk:
+                translated_map[src] = src
+
+        time.sleep(TRANSLATION_REQUEST_INTERVAL)
+
+    return translated_map
+
+
+def translate_reviews_inplace(
+    reviews: list,
+    translator: DeepLTranslator,
+    translate_mode: str = "none",
+    target_lang: str = DEFAULT_TARGET_LANG,
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
 ):
     if translate_mode not in {"none", "title", "full"}:
         translate_mode = "none"
 
+<<<<<<< HEAD
     for idx, review in enumerate(reviews, start=1):
         title = normalize_text(review.get("Title", ""))
         text = normalize_text(review.get("Text", ""))
@@ -406,6 +531,29 @@ def enrich_reviews_inplace(
             review["action_suggestions"] = []
 
         time.sleep(ARK_REQUEST_INTERVAL)
+=======
+    if translate_mode in {"title", "full"}:
+        titles = [normalize_text(r.get("Title", "")) for r in reviews]
+        title_map = translate_unique_texts(
+            titles,
+            translator=translator,
+            target_lang=target_lang,
+        )
+        for r in reviews:
+            src = normalize_text(r.get("Title", ""))
+            r["Title_zh"] = title_map.get(src, src) if src else ""
+
+    if translate_mode == "full":
+        texts = [normalize_text(r.get("Text", "")) for r in reviews]
+        text_map = translate_unique_texts(
+            texts,
+            translator=translator,
+            target_lang=target_lang,
+        )
+        for r in reviews:
+            src = normalize_text(r.get("Text", ""))
+            r["Text_zh"] = text_map.get(src, src) if src else ""
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
 
     return reviews
 
@@ -527,7 +675,11 @@ def incremental_update(
     supabase: Client,
     asin: str,
     current_reviews: list,
+<<<<<<< HEAD
     processor: Optional[ArkReviewProcessor],
+=======
+    translator: Optional[DeepLTranslator],
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
     mode: str = "max",
     translate_mode: str = "none",
     include_reviews: bool = False,
@@ -549,11 +701,19 @@ def incremental_update(
     new_reviews = [current_key_map[k] for k in new_keys if k in current_key_map]
 
     if translate_mode != "none" and new_reviews:
+<<<<<<< HEAD
         if processor is None:
             raise RuntimeError("TRANSLATE_MODE 不是 none，但未初始化 ArkReviewProcessor")
         enrich_reviews_inplace(
             new_reviews,
             processor=processor,
+=======
+        if translator is None:
+            raise RuntimeError("TRANSLATE_MODE 不是 none，但未初始化 DeepL Translator")
+        translate_reviews_inplace(
+            new_reviews,
+            translator=translator,
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
             translate_mode=translate_mode,
         )
 
@@ -606,9 +766,20 @@ def run_once(
     supabase = create_supabase_client()
 
     if translate_mode != "none":
+<<<<<<< HEAD
         processor = ArkReviewProcessor()
     else:
         processor = None
+=======
+        try:
+            translator = DeepLTranslator()
+        except Exception as e:
+            print(f"⚠️ DeepL 未配置，自动关闭翻译，error={e}")
+            translator = None
+            translate_mode = "none"
+    else:
+        translator = None
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
 
     print(f"开始抓取 ASIN: {asin}")
     reviews = get_reviews_by_mode(asin, mode=mode)
@@ -619,7 +790,11 @@ def run_once(
             supabase=supabase,
             asin=asin,
             current_reviews=reviews,
+<<<<<<< HEAD
             processor=processor,
+=======
+            translator=translator,
+>>>>>>> b6c97ffb34b43a8a99932576b6009a9e62e31f5a
             mode=mode,
             translate_mode=translate_mode,
             include_reviews=include_reviews,
