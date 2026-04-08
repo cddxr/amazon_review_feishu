@@ -9,6 +9,12 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+      - key: ARK_API_KEY
+        sync: false
+      - key: ARK_MODEL
+        value: doubao-1-5-lite-32k-250115
+      - key: ARK_BASE_URL
+        value: https://ark.cn-beijing.volces.com/api/v3
       - key: MODE
         value: max
       - key: TRANSLATE_MODE

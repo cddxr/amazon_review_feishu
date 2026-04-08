@@ -21,8 +21,13 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def ensure_required_env():
+def ensure_required_env(translate_mode: str = "none"):
     missing = [k for k in ("SUPABASE_URL", "SUPABASE_KEY") if not os.getenv(k)]
+    if translate_mode != "none":
+        if not os.getenv("ARK_API_KEY"):
+            missing.append("ARK_API_KEY")
+        if not os.getenv("ARK_MODEL"):
+            missing.append("ARK_MODEL")
     if missing:
         raise HTTPException(
             status_code=500,
@@ -95,11 +100,20 @@ def health():
 def config_check():
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
+    ark_key = os.getenv("ARK_API_KEY")
+    ark_model = os.getenv("ARK_MODEL")
+    ark_base_url = os.getenv("ARK_BASE_URL")
     return {
         "SUPABASE_URL_set": bool(url),
         "SUPABASE_KEY_set": bool(key),
+        "ARK_API_KEY_set": bool(ark_key),
+        "ARK_MODEL_set": bool(ark_model),
+        "ARK_BASE_URL_set": bool(ark_base_url),
         "SUPABASE_URL_preview": (url[:40] + "...") if url else None,
         "SUPABASE_KEY_prefix": key[:12] if key else None,
+        "ARK_API_KEY_prefix": ark_key[:12] if ark_key else None,
+        "ARK_MODEL_preview": ark_model if ark_model else None,
+        "ARK_BASE_URL_preview": ark_base_url if ark_base_url else None,
     }
 
 
@@ -110,7 +124,7 @@ def reviews_sync(
     translate_mode: str = Query("full", description="none / title / full"),
     include_reviews: bool = Query(False, description="Return full new_reviews list"),
 ):
-    ensure_required_env()
+    ensure_required_env(translate_mode=translate_mode)
     try:
         return run_once(
             asin=asin,
@@ -137,7 +151,7 @@ def reviews_sync_async(
     mode: str = Query("max", description="basic / full / max"),
     translate_mode: str = Query("full", description="none / title / full"),
 ):
-    ensure_required_env()
+    ensure_required_env(translate_mode=translate_mode)
     task_id = str(uuid4())
     try:
         create_task_record(
@@ -233,7 +247,7 @@ def get_asins_with_new_reviews(
 
                 reviews_res = (
                     supabase.table("reviews")
-                    .select("title,title_zh,text,text_zh,scraped_at")
+                    .select("title,title_zh,text,text_zh,summary_zh,tags,action_suggestions,scraped_at")
                     .eq("asin", asin)
                     .gte("scraped_at", start_iso)
                     .lte("scraped_at", end_iso)
@@ -246,7 +260,7 @@ def get_asins_with_new_reviews(
                     # Fallback: latest samples for this ASIN
                     reviews_res = (
                         supabase.table("reviews")
-                        .select("title,title_zh,text,text_zh,scraped_at")
+                        .select("title,title_zh,text,text_zh,summary_zh,tags,action_suggestions,scraped_at")
                         .eq("asin", asin)
                         .order("scraped_at", desc=True)
                         .limit(sample_size)

@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-璇勮澧為噺鎶撳彇 + Supabase 鍏ュ簱鐗?
+评论增量抓取 + Supabase 入库（火山方舟版）
 
-閫昏緫锛?
-1. 绗竴娆¤繍琛岋細鎶撳彇褰撳墠鍏ㄩ儴璇勮锛屼綔涓哄垵濮嬪寲鍩虹嚎锛屽叏閮ㄥ啓鍏?Supabase
-2. 鍚庣画杩愯锛氬彧璇嗗埆鏂板璇勮锛屽彧鎶婃柊澧炶瘎璁哄啓鍏?Supabase
-3. review_sync_state 琛ㄧ敤浜庤褰曟瘡涓?ASIN 鐨勫悓姝ョ姸鎬?
-4. reviews 琛ㄧ敤浜庝繚瀛樿瘎璁烘槑缁?
+功能说明：
+1. 第一次运行：抓取当前全部评论，作为初始化基线，并写入 Supabase
+2. 后续运行：只识别新增评论，只把新增评论写入 Supabase
+3. review_sync_state 表用于记录每个 ASIN 的同步状态
+4. reviews 表用于保存评论明细
+5. 支持新增评论的 AI 翻译 + 语义分析（summary/tags/action_suggestions）
+
+环境变量：
+- SUPABASE_URL
+- SUPABASE_KEY
+- ARK_API_KEY（TRANSLATE_MODE != none 时必需）
+- ARK_MODEL（可选，默认 doubao-1-5-lite-32k-250115）
+- ARK_BASE_URL（可选，默认 https://ark.cn-beijing.volces.com/api/v3）
+- ASIN（可选）
+- MODE（可选，默认 max）
+- TRANSLATE_MODE（可选，默认 full，none/title/full）
 """
 
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
 import html
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
-from deep_translator import GoogleTranslator
+import requests
 from supabase import create_client, Client
 
 
@@ -37,11 +49,191 @@ UPSERT_BATCH_SIZE = 200
 STATE_REVIEW_KEYS_LIMIT = 200
 HTTP_RETRIES = 4
 
+ARK_BASE_URL_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3"
+ARK_MODEL_DEFAULT = "doubao-1-5-lite-32k-250115"
+ARK_RETRIES = 4
+ARK_REQUEST_TIMEOUT = 45
+ARK_REQUEST_INTERVAL = 0.35
+MAX_SUGGESTIONS = 3
+ALLOWED_TAGS = [
+    "气味",
+    "味道",
+    "价格",
+    "功效",
+    "性价比",
+    "包装",
+    "物流",
+    "服务",
+    "质量",
+    "安全性",
+]
+
+
+class ArkReviewProcessor:
+    def __init__(self):
+        self.api_key = get_env("ARK_API_KEY")
+        self.model = get_env("ARK_MODEL", required=False, default=ARK_MODEL_DEFAULT)
+        self.base_url = get_env("ARK_BASE_URL", required=False, default=ARK_BASE_URL_DEFAULT)
+
+    def _chat_url(self) -> str:
+        base = (self.base_url or ARK_BASE_URL_DEFAULT).rstrip("/")
+        if base.endswith("/chat/completions"):
+            return base
+        return f"{base}/chat/completions"
+
+    @staticmethod
+    def _extract_json(content: str) -> dict:
+        content = (content or "").strip()
+        if not content:
+            return {}
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+        match = re.search(r"\{.*\}", content, flags=re.S)
+        if not match:
+            raise RuntimeError(f"model response is not valid json object: {content[:300]}")
+        parsed = json.loads(match.group(0))
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"model response is not json object: {content[:300]}")
+        return parsed
+
+    def _chat_json(self, system_prompt: str, user_prompt: str) -> dict:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "temperature": 0.2,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+
+        last_error: Optional[Exception] = None
+        for attempt in range(ARK_RETRIES):
+            try:
+                response = requests.post(
+                    self._chat_url(),
+                    headers=headers,
+                    json=payload,
+                    timeout=ARK_REQUEST_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+                content = (
+                    data.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                )
+                if not content:
+                    raise RuntimeError(f"Ark empty response: {data}")
+                parsed = self._extract_json(content)
+                return parsed
+            except Exception as e:
+                last_error = e
+                if attempt < ARK_RETRIES - 1:
+                    time.sleep(1.2 * (attempt + 1))
+
+        raise RuntimeError(f"Ark request failed after {ARK_RETRIES} retries: {last_error}")
+
+    def process_review(
+        self,
+        title: str,
+        text: str,
+        translate_mode: str = "full",
+        target_lang: str = "ZH",
+    ) -> dict:
+        title = normalize_text(title)
+        text = normalize_text(text)
+
+        system_prompt = (
+            "你是电商评论分析助手。只返回 JSON，不要返回解释。"
+            "请基于评论原文识别用户提到的主题标签，并给出可执行建议。"
+        )
+
+        if translate_mode == "none":
+            translation_rule = (
+                "translated_title_zh 和 translated_text_zh 必须返回空字符串。"
+            )
+        elif translate_mode == "title":
+            translation_rule = (
+                "translated_title_zh 返回中文标题翻译；translated_text_zh 返回空字符串。"
+            )
+        else:
+            translation_rule = (
+                "translated_title_zh 和 translated_text_zh 都返回中文翻译。"
+            )
+
+        user_prompt = f"""
+请分析以下评论并返回 JSON。
+
+标签候选（仅可从以下标签中选择）：{json.dumps(ALLOWED_TAGS, ensure_ascii=False)}
+判定规则：只输出评论文本中明确提及或可直接推断的标签，不要硬凑。
+
+返回字段要求：
+- translated_title_zh: string
+- translated_text_zh: string
+- summary_zh: string（不超过60字）
+- tags: string[]
+- action_suggestions: string[]（1-3条，中文，针对性建议）
+
+额外要求：
+- {translation_rule}
+- tags 去重，保持简洁。
+- action_suggestions 需要与 tags 对应。
+
+target_lang={target_lang}
+title={json.dumps(title, ensure_ascii=False)}
+text={json.dumps(text, ensure_ascii=False)}
+""".strip()
+
+        parsed = self._chat_json(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        tags = parsed.get("tags")
+        if not isinstance(tags, list):
+            tags = []
+
+        allowed_set = set(ALLOWED_TAGS)
+        normalized_tags = []
+        seen = set()
+        for tag in tags:
+            value = normalize_text(tag)
+            if not value or value not in allowed_set or value in seen:
+                continue
+            seen.add(value)
+            normalized_tags.append(value)
+
+        action_suggestions = parsed.get("action_suggestions")
+        if not isinstance(action_suggestions, list):
+            action_suggestions = []
+
+        normalized_suggestions = []
+        for item in action_suggestions:
+            value = normalize_text(item)
+            if value:
+                normalized_suggestions.append(value)
+            if len(normalized_suggestions) >= MAX_SUGGESTIONS:
+                break
+
+        return {
+            "Title_zh": normalize_text(parsed.get("translated_title_zh", "")),
+            "Text_zh": normalize_text(parsed.get("translated_text_zh", "")),
+            "summary_zh": normalize_text(parsed.get("summary_zh", "")),
+            "tags": normalized_tags,
+            "action_suggestions": normalized_suggestions,
+        }
+
 
 def get_env(name: str, required: bool = True, default: str | None = None) -> str | None:
     value = os.getenv(name, default)
     if required and not value:
-        raise RuntimeError(f"缂哄皯鐜鍙橀噺: {name}")
+        raise RuntimeError(f"缺少环境变量: {name}")
     return value
 
 
@@ -53,76 +245,6 @@ def create_supabase_client() -> Client:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def translate_text(
-    text: str,
-    target_lang: str = "zh-CN",
-    retries: int = 5,
-    retry_delay: float = 0.8,
-) -> str:
-    if not text:
-        return ""
-
-    source_text = html.unescape(str(text))
-    # Skip translation for symbol-only payloads (emoji/garbled symbols).
-    # Translators often return null for these and should not fail the whole task.
-    if not any(ch.isalpha() for ch in source_text):
-        return source_text
-
-    last_error = None
-    for attempt in range(retries):
-        try:
-            translated = GoogleTranslator(source="auto", target=target_lang).translate(source_text)
-            if translated is None:
-                raise RuntimeError("translator returned null")
-            translated = str(translated).strip()
-            if not translated:
-                raise RuntimeError("translator returned empty")
-            return translated
-        except Exception as e:
-            last_error = e
-            if attempt < retries - 1:
-                time.sleep(retry_delay * (attempt + 1))
-
-    raise RuntimeError(f"translate failed after {retries} retries: {last_error}")
-
-
-def translate_unique_texts(texts, target_lang="zh-CN", max_workers=3):
-    unique_texts = []
-    seen = set()
-
-    for text in texts:
-        if not text:
-            continue
-        if text not in seen:
-            seen.add(text)
-            unique_texts.append(text)
-
-    translated_map = {}
-    if not unique_texts:
-        return translated_map
-
-    worker_count = min(max_workers, max(1, len(unique_texts)))
-    failures = []
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_text = {
-            executor.submit(translate_text, text, target_lang): text
-            for text in unique_texts
-        }
-        for future in as_completed(future_to_text):
-            source_text = future_to_text[future]
-            try:
-                translated_map[source_text] = future.result()
-            except Exception as e:
-                failures.append({"text": source_text[:120], "error": str(e)})
-
-    if failures:
-        raise RuntimeError(
-            f"translation failed for {len(failures)} texts, sample={failures[:3]}"
-        )
-
-    return translated_map
 
 
 def fetch_reviews(asin: str, filter_val=0, sort_val=0, is_verified=False, delay=0.2):
@@ -241,23 +363,49 @@ def get_reviews_by_mode(asin: str, mode: str = "max"):
     return scrape_max(asin)
 
 
-def translate_reviews_inplace(reviews: list, translate_mode: str = "none", target_lang="zh-CN"):
+def normalize_text(value) -> str:
+    if value is None:
+        return ""
+    return html.unescape(str(value)).strip()
+
+
+def enrich_reviews_inplace(
+    reviews: list,
+    processor: ArkReviewProcessor,
+    translate_mode: str = "none",
+):
     if translate_mode not in {"none", "title", "full"}:
         translate_mode = "none"
 
-    if translate_mode in {"title", "full"}:
-        titles = [html.unescape(str(r.get("Title", "") or "")) for r in reviews]
-        title_map = translate_unique_texts(titles, target_lang=target_lang)
-        for r in reviews:
-            src = html.unescape(str(r.get("Title", "") or ""))
-            r["Title_zh"] = title_map.get(src, src) or ""
+    for idx, review in enumerate(reviews, start=1):
+        title = normalize_text(review.get("Title", ""))
+        text = normalize_text(review.get("Text", ""))
 
-    if translate_mode == "full":
-        texts = [html.unescape(str(r.get("Text", "") or "")) for r in reviews]
-        text_map = translate_unique_texts(texts, target_lang=target_lang)
-        for r in reviews:
-            src = html.unescape(str(r.get("Text", "") or ""))
-            r["Text_zh"] = text_map.get(src, src) or ""
+        if not title and not text:
+            review["Title_zh"] = ""
+            review["Text_zh"] = ""
+            review["summary_zh"] = ""
+            review["tags"] = []
+            review["action_suggestions"] = []
+            continue
+
+        try:
+            enriched = processor.process_review(
+                title=title,
+                text=text,
+                translate_mode=translate_mode,
+                target_lang="ZH",
+            )
+            review.update(enriched)
+        except Exception as e:
+            print(f"enrich review failed idx={idx}, fallback to empty ai fields, error={e}")
+            review["Title_zh"] = title if translate_mode in {"title", "full"} else ""
+            review["Text_zh"] = text if translate_mode == "full" else ""
+            review["summary_zh"] = ""
+            review["tags"] = []
+            review["action_suggestions"] = []
+
+        time.sleep(ARK_REQUEST_INTERVAL)
 
     return reviews
 
@@ -299,6 +447,9 @@ def to_review_rows(asin: str, reviews: list[dict], scraped_at: str) -> list[dict
             "origin_description": r.get("OriginDescription", ""),
             "title_zh": r.get("Title_zh") or "",
             "text_zh": r.get("Text_zh") or "",
+            "summary_zh": r.get("summary_zh") or "",
+            "tags": r.get("tags") or [],
+            "action_suggestions": r.get("action_suggestions") or [],
             "scraped_at": scraped_at,
             "raw_payload": r,
         })
@@ -376,15 +527,12 @@ def incremental_update(
     supabase: Client,
     asin: str,
     current_reviews: list,
+    processor: Optional[ArkReviewProcessor],
     mode: str = "max",
     translate_mode: str = "none",
     include_reviews: bool = False,
     sample_size: int = 5,
 ):
-    """
-    绗竴娆¤繍琛岋細鍏ㄩ儴鍐欏叆
-    鍚庣画杩愯锛氬彧杩藉姞鏂板璇勮
-    """
     old_keys = get_existing_review_keys(supabase, asin)
 
     current_key_map = {}
@@ -401,7 +549,13 @@ def incremental_update(
     new_reviews = [current_key_map[k] for k in new_keys if k in current_key_map]
 
     if translate_mode != "none" and new_reviews:
-        translate_reviews_inplace(new_reviews, translate_mode=translate_mode)
+        if processor is None:
+            raise RuntimeError("TRANSLATE_MODE 不是 none，但未初始化 ArkReviewProcessor")
+        enrich_reviews_inplace(
+            new_reviews,
+            processor=processor,
+            translate_mode=translate_mode,
+        )
 
     scraped_at = now_iso()
     rows = to_review_rows(asin, new_reviews, scraped_at)
@@ -414,6 +568,7 @@ def incremental_update(
         new_count=len(new_reviews),
         scraped_at=scraped_at,
     )
+
     try:
         insert_sync_run(
             supabase=supabase,
@@ -444,27 +599,32 @@ def incremental_update(
 def run_once(
     asin: str,
     mode: str = "max",
-    translate_mode: str = "none",
+    translate_mode: str = "full",
     include_reviews: bool = False,
 ):
     asin = asin.strip().upper()
     supabase = create_supabase_client()
 
-    print(f"寮€濮嬫姄鍙?ASIN: {asin}")
+    if translate_mode != "none":
+        processor = ArkReviewProcessor()
+    else:
+        processor = None
+
+    print(f"开始抓取 ASIN: {asin}")
     reviews = get_reviews_by_mode(asin, mode=mode)
-    print(f"鎶撳彇瀹屾垚锛屽綋鍓嶆€昏瘎璁烘暟: {len(reviews)}")
+    print(f"抓取完成，当前总评论数: {len(reviews)}")
 
     try:
         result = incremental_update(
             supabase=supabase,
             asin=asin,
             current_reviews=reviews,
+            processor=processor,
             mode=mode,
             translate_mode=translate_mode,
             include_reviews=include_reviews,
         )
     except Exception as e:
-        # Best effort: keep a failed run log for observability.
         try:
             insert_sync_run(
                 supabase=supabase,
@@ -485,6 +645,8 @@ def run_once(
         "asin": result["asin"],
         "current_total": result["current_total"],
         "new_count": result["new_count"],
+        "upserted_rows": result["upserted_rows"],
+        "translate_mode": translate_mode,
     }, ensure_ascii=False, indent=2))
 
     return result
@@ -500,4 +662,3 @@ if __name__ == "__main__":
         mode=MODE,
         translate_mode=TRANSLATE_MODE,
     )
-

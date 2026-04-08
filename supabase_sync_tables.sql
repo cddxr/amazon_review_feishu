@@ -33,3 +33,13 @@ create table if not exists public.review_sync_runs (
 
 create index if not exists idx_review_sync_runs_asin_created_at
 on public.review_sync_runs (asin, created_at desc);
+
+-- Reviews AI analysis fields (safe migration for existing table).
+alter table if exists public.reviews
+  add column if not exists summary_zh text default '';
+
+alter table if exists public.reviews
+  add column if not exists tags jsonb default '[]'::jsonb;
+
+alter table if exists public.reviews
+  add column if not exists action_suggestions jsonb default '[]'::jsonb;
