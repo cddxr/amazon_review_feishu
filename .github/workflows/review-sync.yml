@@ -14,8 +14,6 @@ jobs:
       fail-fast: false
       matrix:
         asin:
-          - B0DDCJFFBM # VP203
-          - B0DFBMVX7T # VP204
           - B0F8HXNY5N # VP218
           - B0G64PSMX4 # XG001
     steps:
