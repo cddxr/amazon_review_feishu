@@ -43,8 +43,6 @@ jobs:
           from datetime import datetime
 
           NAME_TO_ASIN = {
-              "VP203": "B0DDCJFFBM",
-              "VP204": "B0DFBMVX7T",
               "VP218": "B0F8HXNY5N",
               "XG001": "B0G64PSMX4",
           }
@@ -69,6 +67,20 @@ jobs:
                   return "N/A"
               return m.group(1).replace(",", "")
 
+          def normalize_tags(value):
+              if isinstance(value, list):
+                  tags = [str(x).strip() for x in value if str(x).strip()]
+                  return ", ".join(tags) if tags else "无"
+              if isinstance(value, str) and value.strip():
+                  return value.strip()
+              return "无"
+
+          def normalize_suggestions(value):
+              if isinstance(value, list):
+                  items = [str(x).strip() for x in value if str(x).strip()]
+                  return items[:3]
+              return []
+
           for name, asin in NAME_TO_ASIN.items():
               idx += 1
               rating_item = by_asin_rating.get(asin, {})
@@ -85,17 +97,28 @@ jobs:
               lines.append(f"review: {current_total}")
 
               if new_count > 0:
-                  lines.append(f"new_count: {new_count}")
                   samples = new_item.get("new_reviews_sample", [])
                   if samples:
                       lines.append("new_content:")
                       for s in samples:
                           zh = (s.get("text_zh") or "").strip()
                           en = (s.get("text") or "").strip()
+                          summary = (s.get("summary_zh") or "").strip() or "无"
+                          tags = normalize_tags(s.get("tags"))
+                          suggestions = normalize_suggestions(s.get("action_suggestions"))
                           if zh:
                               lines.append(f"zh: {zh[:200]}")
                           if en:
                               lines.append(f"en: {en[:200]}")
+                          lines.append(f"summary: {summary[:120]}")
+                          lines.append(f"tags: {tags}")
+                          lines.append("action_suggestions:")
+                          if suggestions:
+                              for i, item in enumerate(suggestions, start=1):
+                                  lines.append(f"{i}) {item[:120]}")
+                          else:
+                              lines.append("1) 无")
+                          lines.append("")
               lines.append("")
 
           summary = "\n".join(lines).strip()
