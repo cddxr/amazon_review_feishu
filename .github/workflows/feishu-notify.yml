@@ -33,7 +33,7 @@ jobs:
 
       - name: Fetch new-review summary
         run: |
-          curl -sS "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/runs/new?hours=24&limit=200&include_content=true&sample_size=2" -o summary.json
+          curl -sS "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/runs/new?hours=12&limit=200&include_content=true&sample_size=2" -o summary.json
 
       - name: Build Feishu payload
         run: |
@@ -78,7 +78,7 @@ jobs:
           def normalize_suggestions(value):
               if isinstance(value, list):
                   items = [str(x).strip() for x in value if str(x).strip()]
-                  return items[:3]
+                  return items[:1]
               return []
 
           for name, asin in NAME_TO_ASIN.items():
