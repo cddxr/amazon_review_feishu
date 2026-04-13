@@ -195,6 +195,23 @@ def get_sync_task(task_id: str):
     return rows[0]
 
 
+@app.get("/reviews/sync/state")
+def get_sync_state(asin: str = Query(..., description="Amazon ASIN")):
+    ensure_required_env()
+    supabase = create_supabase_client()
+    result = (
+        supabase.table("review_sync_state")
+        .select("asin,last_total_reviews,last_new_count,last_check_time,last_scraped_at,updated_at")
+        .eq("asin", asin.strip().upper())
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail={"error": "ASIN state not found"})
+    return rows[0]
+
+
 @app.get("/reviews/sync/runs/new")
 def get_asins_with_new_reviews(
     limit: int = Query(100, ge=1, le=500, description="Max runs to scan"),

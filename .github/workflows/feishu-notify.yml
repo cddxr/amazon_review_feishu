@@ -40,8 +40,11 @@ jobs:
           python - << 'PY'
           import json
           import re
+          import urllib.parse
+          import urllib.request
           from datetime import datetime
 
+          BASE_URL = "https://amazon-review-feishu-fb07.onrender.com"
           NAME_TO_ASIN = {
               "VP218": "B0F8HXNY5N",
               "XG001": "B0G64PSMX4",
@@ -59,7 +62,7 @@ jobs:
           lines = []
           idx = 0
 
-          def normalize_review_count(text):
+          def normalize_count(text):
               if not text:
                   return "N/A"
               m = re.search(r"([\d,]+)", str(text))
@@ -98,20 +101,32 @@ jobs:
                   return "N/A"
               return f"{'★' * n}{'☆' * (5 - n)} ({n}/5)"
 
+          def fetch_latest_review_total(asin):
+              try:
+                  query = urllib.parse.urlencode({"asin": asin})
+                  url = f"{BASE_URL}/reviews/sync/state?{query}"
+                  with urllib.request.urlopen(url, timeout=30) as resp:
+                      payload = json.loads(resp.read().decode("utf-8"))
+                  value = payload.get("last_total_reviews")
+                  return value if value is not None else "N/A"
+              except Exception:
+                  return "N/A"
+
           for name, asin in NAME_TO_ASIN.items():
               idx += 1
               rating_item = by_asin_rating.get(asin, {})
               new_item = by_asin_new.get(asin, {})
 
               rating_value = rating_item.get("rating_value", "N/A")
-              reviews_raw = rating_item.get("reviews_raw", "N/A")
-              reviews_count = normalize_review_count(reviews_raw)
-              current_total = new_item.get("current_total", reviews_count)
+              rating_count = normalize_count(rating_item.get("reviews_raw", "N/A"))
+              review_count = fetch_latest_review_total(asin)
+              if review_count == "N/A":
+                  review_count = new_item.get("current_total", "N/A")
               new_count = int(new_item.get("new_count", 0) or 0)
 
               lines.append(f"{idx}.{name}: {asin}")
-              lines.append(f"rating: {rating_value}/{reviews_count}")
-              lines.append(f"review: {current_total}")
+              lines.append(f"rating: {rating_value}/{rating_count}")
+              lines.append(f"review: {review_count}")
 
               if new_count > 0:
                   samples = new_item.get("new_reviews_sample", [])
