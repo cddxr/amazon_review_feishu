@@ -81,6 +81,23 @@ jobs:
                   return items[:1]
               return []
 
+          def normalize_star_value(value):
+              try:
+                  num = float(value)
+              except (TypeError, ValueError):
+                  return None
+              if num < 0:
+                  num = 0
+              if num > 5:
+                  num = 5
+              return int(round(num))
+
+          def render_stars(value):
+              n = normalize_star_value(value)
+              if n is None:
+                  return "N/A"
+              return f"{'★' * n}{'☆' * (5 - n)} ({n}/5)"
+
           for name, asin in NAME_TO_ASIN.items():
               idx += 1
               rating_item = by_asin_rating.get(asin, {})
@@ -103,6 +120,7 @@ jobs:
                       for s in samples:
                           zh = (s.get("text_zh") or "").strip()
                           en = (s.get("text") or "").strip()
+                          star_line = render_stars(s.get("rating"))
                           summary = (s.get("summary_zh") or "").strip() or "无"
                           tags = normalize_tags(s.get("tags"))
                           suggestions = normalize_suggestions(s.get("action_suggestions"))
@@ -110,6 +128,7 @@ jobs:
                               lines.append(f"zh: {zh[:200]}")
                           if en:
                               lines.append(f"en: {en[:200]}")
+                          lines.append(f"star: {star_line}")
                           lines.append(f"summary: {summary[:120]}")
                           lines.append(f"tags: {tags}")
                           lines.append("action_suggestions:")

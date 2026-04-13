@@ -248,7 +248,7 @@ def get_asins_with_new_reviews(
 
                 reviews_res = (
                     supabase.table("reviews")
-                    .select("title,title_zh,text,text_zh,summary_zh,tags,action_suggestions,scraped_at")
+                    .select("title,title_zh,text,text_zh,rating,summary_zh,tags,action_suggestions,scraped_at")
                     .eq("asin", asin)
                     .gte("scraped_at", start_iso)
                     .lte("scraped_at", end_iso)
@@ -261,7 +261,7 @@ def get_asins_with_new_reviews(
                     # Fallback: latest samples for this ASIN
                     reviews_res = (
                         supabase.table("reviews")
-                        .select("title,title_zh,text,text_zh,summary_zh,tags,action_suggestions,scraped_at")
+                        .select("title,title_zh,text,text_zh,rating,summary_zh,tags,action_suggestions,scraped_at")
                         .eq("asin", asin)
                         .order("scraped_at", desc=True)
                         .limit(sample_size)
