@@ -15,7 +15,7 @@ jobs:
       matrix:
         asin:
           - B0F8HXNY5N # VP218
-          - B0G64PSMX4 # XG001
+          - B0FQCBMFYQ # XG001
     steps:
       - name: Trigger async sync and wait completion
         run: |
