@@ -1,4 +1,4 @@
-name: Feishu New Review Notify
+﻿name: Feishu New Review Notify
 
 on:
   workflow_run:
@@ -35,7 +35,7 @@ jobs:
         run: |
           curl -sS "https://amazon-review-feishu.onrender.com/reviews/sync/runs/new?hours=12&limit=200&include_content=true&sample_size=2" -o summary.json
 
-      - name: Build Structured payload
+      - name: Build Feishu card payload
         run: |
           python - << 'PY'
           import json
@@ -118,6 +118,7 @@ jobs:
                   "time": payload_date,
                   "asin": asin,
                   "name": name,
+                  "rating_count": rating_count,
                   "total": review_total,
                   "new_count": new_count,
                   "title": title,
@@ -128,8 +129,7 @@ jobs:
                   "tag": tag_text,
               })
 
-          # Prebuilt message text so Feishu automation can directly send without template logic.
-          lines = [f"{payload_date} Review Delta Daily", ""]
+          lines = []
           for idx, item in enumerate(items, start=1):
               asin = item.get("asin") or ""
               if asin == "B0F8HXNY5N":
@@ -139,35 +139,52 @@ jobs:
               else:
                   label = asin
 
-              lines.append(f"{idx}.{label}")
-              lines.append(f"time: {item.get('time') or ''}")
-              lines.append(f"total: {item.get('total') or ''}")
-              lines.append(f"new_count: {item.get('new_count') or 0}")
+              lines.append(f"**{idx}.{label}**")
+              lines.append(f"**time:** {item.get('time') or ''}")
+              lines.append(f"**total:** {item.get('total') or ''}")
+              lines.append(f"**new_count:** {item.get('new_count') or 0}")
               lines.append("")
 
               if item.get("title"):
-                  lines.append(f"title: {item.get('title')}")
+                  lines.append(f"**title:** {item.get('title')}")
               if item.get("content"):
-                  lines.append(f"content: {item.get('content')}")
+                  lines.append(f"**content:** {item.get('content')}")
               if item.get("title_zh"):
-                  lines.append(f"title_zh: {item.get('title_zh')}")
+                  lines.append(f"**title_zh:** {item.get('title_zh')}")
               if item.get("content_zh"):
-                  lines.append(f"content_zh: {item.get('content_zh')}")
+                  lines.append(f"**content_zh:** {item.get('content_zh')}")
               if item.get("summary"):
-                  lines.append(f"summary: {item.get('summary')}")
+                  lines.append(f"**summary:** {item.get('summary')}")
               if item.get("tag"):
-                  lines.append(f"tag: {item.get('tag')}")
+                  lines.append(f"**tag:** {item.get('tag')}")
               lines.append("")
 
               if idx < len(items):
                   lines.append("────────────────────────────────")
                   lines.append("")
 
+          body_text = "\n".join(lines).strip()
+
           payload = {
-              "title": f"{payload_date} Review Delta Daily",
-              "content": "\n".join(lines).strip(),
-              "date": payload_date,
-              "items": items,
+              "msg_type": "interactive",
+              "card": {
+                  "config": {
+                      "wide_screen_mode": True
+                  },
+                  "header": {
+                      "template": "blue",
+                      "title": {
+                          "tag": "plain_text",
+                          "content": f"{payload_date} Review Delta Daily"
+                      }
+                  },
+                  "elements": [
+                      {
+                          "tag": "markdown",
+                          "content": body_text
+                      }
+                  ]
+              }
           }
 
           with open("payload.json", "w", encoding="utf-8") as f:
@@ -177,6 +194,7 @@ jobs:
       - name: Send to Feishu webhook
         run: |
           WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/b2b81928-7d95-486e-9e39-a6bc6f58a456"
-          curl -sS -X POST "$WEBHOOK_URL" \
+          resp=$(curl -sS -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d @payload.json
+            -d @payload.json)
+          echo "$resp"
