@@ -71,31 +71,6 @@ jobs:
               except Exception:
                   return None
 
-          def normalize_suggestions(value):
-              if isinstance(value, list):
-                  items = [str(x).strip() for x in value if str(x).strip()]
-                  return items[:1]
-              return []
-
-          def normalize_star_value(value):
-              try:
-                  num = float(value)
-              except (TypeError, ValueError):
-                  return None
-              if num < 0:
-                  num = 0
-              if num > 5:
-                  num = 5
-              return int(round(num))
-
-          def render_stars(value):
-              n = normalize_star_value(value)
-              if n is None:
-                  return "N/A"
-              full_star = "\u2605"
-              empty_star = "\u2606"
-              return f"{full_star * n}{empty_star * (5 - n)} ({n}/5)"
-
           def fetch_latest_review_total(asin):
               try:
                   query = urllib.parse.urlencode({"asin": asin})
@@ -114,12 +89,6 @@ jobs:
               rating_item = by_asin_rating.get(asin, {})
               new_item = by_asin_new.get(asin, {})
 
-              rating_value_raw = rating_item.get("rating_value")
-              try:
-                  rating_value = float(rating_value_raw)
-              except Exception:
-                  rating_value = None
-
               rating_count = normalize_count(rating_item.get("reviews_raw", ""))
               review_total = fetch_latest_review_total(asin)
               if review_total is None:
@@ -128,45 +97,34 @@ jobs:
                   except Exception:
                       review_total = None
 
-              new_reviews = []
-              for s in (new_item.get("new_reviews_sample", []) or []):
-                  zh = (s.get("text_zh") or "").strip()
-                  en = (s.get("text") or "").strip()
-                  summary = (s.get("summary_zh") or "").strip()
+              new_count = int(new_item.get("new_count", 0) or 0)
 
-                  raw_tags = s.get("tags")
-                  if isinstance(raw_tags, list):
-                      tags = [str(x).strip() for x in raw_tags if str(x).strip()]
-                  else:
-                      tags = []
+              sample = (new_item.get("new_reviews_sample", []) or [])
+              first = sample[0] if sample else {}
 
-                  suggestions = normalize_suggestions(s.get("action_suggestions"))
-                  suggestion = suggestions[0] if suggestions else ""
+              content_en = (first.get("text") or "").strip()
+              content_zh = (first.get("text_zh") or "").strip()
+              summary = (first.get("summary_zh") or "").strip()
+              tags = first.get("tags")
+              if isinstance(tags, list):
+                  tag_text = ",".join([str(x).strip() for x in tags if str(x).strip()])
+              else:
+                  tag_text = ""
 
-                  star_value = normalize_star_value(s.get("rating"))
-                  star_text = render_stars(s.get("rating"))
-
-                  new_reviews.append({
-                      "zh": zh,
-                      "en": en,
-                      "star": {
-                          "text": star_text,
-                          "value": star_value,
-                      },
-                      "summary": summary,
-                      "tags": tags,
-                      "suggestion": suggestion,
-                  })
+              title = (first.get("title") or "").strip()
+              title_zh = (first.get("title_zh") or "").strip()
 
               items.append({
-                  "name": name,
+                  "time": payload_date,
                   "asin": asin,
-                  "rating": {
-                      "value": rating_value,
-                      "count": rating_count,
-                  },
-                  "review_total": review_total,
-                  "new_reviews": new_reviews,
+                  "total": review_total,
+                  "new_count": new_count,
+                  "title": title,
+                  "content": content_en,
+                  "title_zh": title_zh,
+                  "content_zh": content_zh,
+                  "summary": summary,
+                  "tag": tag_text,
               })
 
           payload = {
