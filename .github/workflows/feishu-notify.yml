@@ -117,6 +117,7 @@ jobs:
               items.append({
                   "time": payload_date,
                   "asin": asin,
+                  "name": name,
                   "total": review_total,
                   "new_count": new_count,
                   "title": title,
@@ -127,7 +128,44 @@ jobs:
                   "tag": tag_text,
               })
 
+          # Prebuilt message text so Feishu automation can directly send without template logic.
+          lines = [f"{payload_date} Review Delta Daily", ""]
+          for idx, item in enumerate(items, start=1):
+              asin = item.get("asin") or ""
+              if asin == "B0F8HXNY5N":
+                  label = "VP218 蘑菇可可.B0F8HXNY5N"
+              elif asin == "B0FQCBMFYQ":
+                  label = "XG001 蛋白质咖啡.B0FQCBMFYQ"
+              else:
+                  label = asin
+
+              lines.append(f"{idx}.{label}")
+              lines.append(f"time: {item.get('time') or ''}")
+              lines.append(f"total: {item.get('total') or ''}")
+              lines.append(f"new_count: {item.get('new_count') or 0}")
+              lines.append("")
+
+              if item.get("title"):
+                  lines.append(f"title: {item.get('title')}")
+              if item.get("content"):
+                  lines.append(f"content: {item.get('content')}")
+              if item.get("title_zh"):
+                  lines.append(f"title_zh: {item.get('title_zh')}")
+              if item.get("content_zh"):
+                  lines.append(f"content_zh: {item.get('content_zh')}")
+              if item.get("summary"):
+                  lines.append(f"summary: {item.get('summary')}")
+              if item.get("tag"):
+                  lines.append(f"tag: {item.get('tag')}")
+              lines.append("")
+
+              if idx < len(items):
+                  lines.append("────────────────────────────────")
+                  lines.append("")
+
           payload = {
+              "title": f"{payload_date} Review Delta Daily",
+              "content": "\n".join(lines).strip(),
               "date": payload_date,
               "items": items,
           }
@@ -136,11 +174,15 @@ jobs:
               json.dump(payload, f, ensure_ascii=False)
           PY
 
-      - name: Send to Feishu Base webhook
+      - name: Send to Feishu webhook
         env:
-          FEISHU_BASE_WEBHOOK: ${{ secrets.FEISHU_BASE_WEBHOOK }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
         run: |
-          WEBHOOK_URL="${FEISHU_BASE_WEBHOOK:-https://o9xilj84js.feishu.cn/base/workflow/webhook/event/O5ohaBNzbweJCKhiO1McT4I3nTh}"
+          WEBHOOK_URL="$FEISHU_WEBHOOK"
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "Missing GitHub secret: FEISHU_WEBHOOK"
+            exit 1
+          fi
           curl -sS -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d @payload.json
