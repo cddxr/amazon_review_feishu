@@ -89,6 +89,7 @@ jobs:
               rating_item = by_asin_rating.get(asin, {})
               new_item = by_asin_new.get(asin, {})
 
+              rating_value = rating_item.get("rating_value", "N/A")
               rating_count = normalize_count(rating_item.get("reviews_raw", ""))
               review_total = fetch_latest_review_total(asin)
               if review_total is None:
@@ -118,6 +119,7 @@ jobs:
                   "time": payload_date,
                   "asin": asin,
                   "name": name,
+                  "rating_value": rating_value,
                   "rating_count": rating_count,
                   "total": review_total,
                   "new_count": new_count,
@@ -140,6 +142,7 @@ jobs:
                   label = asin
 
               lines.append(f"**{idx}.{label}**")
+              lines.append(f"**rating:** {item.get('rating_value')}/{item.get('rating_count') or ''}")
               lines.append(f"**时间:** {item.get('time') or ''}")
               lines.append(f"**总数:** {item.get('total') or ''}")
               lines.append(f"**新增:** {item.get('new_count') or 0}")
