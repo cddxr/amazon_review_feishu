@@ -180,3 +180,15 @@ jobs:
           curl -sS -X POST "$FEISHU_WEBHOOK" \
             -H "Content-Type: application/json" \
             -d @payload.json
+
+      - name: Send to Feishu Base webhook
+        env:
+          FEISHU_BASE_WEBHOOK: ${{ secrets.FEISHU_BASE_WEBHOOK }}
+        run: |
+          if [ -z "$FEISHU_BASE_WEBHOOK" ]; then
+            echo "Missing GitHub secret: FEISHU_BASE_WEBHOOK"
+            exit 1
+          fi
+          curl -sS -X POST "$FEISHU_BASE_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d @payload.json
