@@ -175,14 +175,8 @@ jobs:
           PY
 
       - name: Send to Feishu webhook
-        env:
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
         run: |
-          WEBHOOK_URL="$FEISHU_WEBHOOK"
-          if [ -z "$WEBHOOK_URL" ]; then
-            echo "Missing GitHub secret: FEISHU_WEBHOOK"
-            exit 1
-          fi
+          WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/b2b81928-7d95-486e-9e39-a6bc6f58a456"
           curl -sS -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d @payload.json
