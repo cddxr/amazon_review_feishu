@@ -33,7 +33,7 @@ jobs:
 
       - name: Fetch new-review summary
         run: |
-          curl -sS "https://amazon-review-feishu-fb07.onrender.com/reviews/sync/runs/new?hours=12&limit=200&include_content=true&sample_size=2" -o summary.json
+          curl -sS "https://amazon-review-feishu.onrender.com/reviews/sync/runs/new?hours=12&limit=200&include_content=true&sample_size=2" -o summary.json
 
       - name: Build Feishu payload
         run: |
@@ -44,7 +44,7 @@ jobs:
           import urllib.request
           from datetime import datetime, timedelta
 
-          BASE_URL = "https://amazon-review-feishu-fb07.onrender.com"
+          BASE_URL = "https://amazon-review-feishu.onrender.com"
           NAME_TO_ASIN = {
               "VP218": "B0F8HXNY5N",
               "XG001": "B0FQCBMFYQ",

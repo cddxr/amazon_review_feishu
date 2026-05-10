@@ -25,7 +25,7 @@ jobs:
           import urllib.parse
           import urllib.request
 
-          base = "https://amazon-review-feishu-fb07.onrender.com"
+          base = "https://amazon-review-feishu.onrender.com"
           asin = "${{ matrix.asin }}"
           query = urllib.parse.urlencode({
               "asin": asin,
