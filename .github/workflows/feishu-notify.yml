@@ -92,7 +92,9 @@ jobs:
               n = normalize_star_value(value)
               if n is None:
                   return "N/A"
-              return f"{'鈽? * n}{'鈽? * (5 - n)} ({n}/5)"
+              full_star = "\u2605"
+              empty_star = "\u2606"
+              return f"{full_star * n}{empty_star * (5 - n)} ({n}/5)"
 
           def fetch_latest_review_total(asin):
               try:
