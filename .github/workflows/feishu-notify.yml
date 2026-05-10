@@ -35,7 +35,7 @@ jobs:
         run: |
           curl -sS "https://amazon-review-feishu.onrender.com/reviews/sync/runs/new?hours=12&limit=200&include_content=true&sample_size=2" -o summary.json
 
-      - name: Build Feishu payload
+      - name: Build Structured payload
         run: |
           python - << 'PY'
           import json
@@ -58,26 +58,18 @@ jobs:
           by_asin_rating = {item.get("asin"): item for item in rating_data.get("items", [])}
           by_asin_new = {item.get("asin"): item for item in summary_data.get("asins_with_new_reviews", [])}
 
-          title_date = datetime.utcnow() + timedelta(hours=8, days=1)
-          title = f"{title_date.strftime('%Y-%m-%d')} Review Delta Daily"
-          lines = []
-          idx = 0
+          payload_date = (datetime.utcnow() + timedelta(hours=8, days=1)).strftime("%Y-%m-%d")
 
           def normalize_count(text):
               if not text:
-                  return "N/A"
+                  return None
               m = re.search(r"([\d,]+)", str(text))
               if not m:
-                  return "N/A"
-              return m.group(1).replace(",", "")
-
-          def normalize_tags(value):
-              if isinstance(value, list):
-                  tags = [str(x).strip() for x in value if str(x).strip()]
-                  return ", ".join(tags) if tags else "无"
-              if isinstance(value, str) and value.strip():
-                  return value.strip()
-              return "无"
+                  return None
+              try:
+                  return int(m.group(1).replace(",", ""))
+              except Exception:
+                  return None
 
           def normalize_suggestions(value):
               if isinstance(value, list):
@@ -100,7 +92,7 @@ jobs:
               n = normalize_star_value(value)
               if n is None:
                   return "N/A"
-              return f"{'★' * n}{'☆' * (5 - n)} ({n}/5)"
+              return f"{'鈽? * n}{'鈽? * (5 - n)} ({n}/5)"
 
           def fetch_latest_review_total(asin):
               try:
@@ -109,77 +101,80 @@ jobs:
                   with urllib.request.urlopen(url, timeout=30) as resp:
                       payload = json.loads(resp.read().decode("utf-8"))
                   value = payload.get("last_total_reviews")
-                  return value if value is not None else "N/A"
+                  if value is None:
+                      return None
+                  return int(value)
               except Exception:
-                  return "N/A"
+                  return None
 
+          items = []
           for name, asin in NAME_TO_ASIN.items():
-              idx += 1
               rating_item = by_asin_rating.get(asin, {})
               new_item = by_asin_new.get(asin, {})
 
-              rating_value = rating_item.get("rating_value", "N/A")
-              rating_count = normalize_count(rating_item.get("reviews_raw", "N/A"))
-              review_count = fetch_latest_review_total(asin)
-              if review_count == "N/A":
-                  review_count = new_item.get("current_total", "N/A")
-              new_count = int(new_item.get("new_count", 0) or 0)
+              rating_value_raw = rating_item.get("rating_value")
+              try:
+                  rating_value = float(rating_value_raw)
+              except Exception:
+                  rating_value = None
 
-              lines.append(f"{idx}.{name}: {asin}")
-              lines.append(f"rating: {rating_value}/{rating_count}")
-              lines.append(f"review: {review_count}")
-              lines.append("新增内容:")
+              rating_count = normalize_count(rating_item.get("reviews_raw", ""))
+              review_total = fetch_latest_review_total(asin)
+              if review_total is None:
+                  try:
+                      review_total = int(new_item.get("current_total"))
+                  except Exception:
+                      review_total = None
 
-              if new_count > 0:
-                  samples = new_item.get("new_reviews_sample", [])
-                  if samples:
-                      for s in samples:
-                          zh = (s.get("text_zh") or "").strip()
-                          en = (s.get("text") or "").strip()
-                          star_line = render_stars(s.get("rating"))
-                          summary = (s.get("summary_zh") or "").strip() or "无"
-                          tags = normalize_tags(s.get("tags"))
-                          suggestions = normalize_suggestions(s.get("action_suggestions"))
+              new_reviews = []
+              for s in (new_item.get("new_reviews_sample", []) or []):
+                  zh = (s.get("text_zh") or "").strip()
+                  en = (s.get("text") or "").strip()
+                  summary = (s.get("summary_zh") or "").strip()
 
-                          if zh:
-                              lines.append(f"中文: {zh[:200]}")
-                          if en:
-                              lines.append(f"英文: {en[:200]}")
-                          lines.append(f"星级: {star_line}")
-                          lines.append(f"总结: {summary[:120]}")
-                          lines.append(f"标签: {tags}")
-                          if suggestions:
-                              lines.append(f"建议: {suggestions[0][:120]}")
-                          else:
-                              lines.append("建议: 无")
-                          lines.append("")
+                  raw_tags = s.get("tags")
+                  if isinstance(raw_tags, list):
+                      tags = [str(x).strip() for x in raw_tags if str(x).strip()]
                   else:
-                      lines.append("无")
-                      lines.append("")
-              else:
-                  lines.append("无")
-                  lines.append("")
+                      tags = []
 
-              lines.append("- - - - - - - - - - - - - - - - - - - - - -")
-              lines.append("")
+                  suggestions = normalize_suggestions(s.get("action_suggestions"))
+                  suggestion = suggestions[0] if suggestions else ""
 
-          summary = "\n".join(lines).strip()
-          payload = {"title": title, "summary": summary}
+                  star_value = normalize_star_value(s.get("rating"))
+                  star_text = render_stars(s.get("rating"))
+
+                  new_reviews.append({
+                      "zh": zh,
+                      "en": en,
+                      "star": {
+                          "text": star_text,
+                          "value": star_value,
+                      },
+                      "summary": summary,
+                      "tags": tags,
+                      "suggestion": suggestion,
+                  })
+
+              items.append({
+                  "name": name,
+                  "asin": asin,
+                  "rating": {
+                      "value": rating_value,
+                      "count": rating_count,
+                  },
+                  "review_total": review_total,
+                  "new_reviews": new_reviews,
+              })
+
+          payload = {
+              "date": payload_date,
+              "items": items,
+          }
+
           with open("payload.json", "w", encoding="utf-8") as f:
               json.dump(payload, f, ensure_ascii=False)
           PY
-
-      - name: Send to Feishu webhook
-        env:
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-        run: |
-          if [ -z "$FEISHU_WEBHOOK" ]; then
-            echo "Missing GitHub secret: FEISHU_WEBHOOK"
-            exit 1
-          fi
-          curl -sS -X POST "$FEISHU_WEBHOOK" \
-            -H "Content-Type: application/json" \
-            -d @payload.json
 
       - name: Send to Feishu Base webhook
         env:
