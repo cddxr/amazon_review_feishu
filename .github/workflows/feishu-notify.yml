@@ -140,19 +140,19 @@ jobs:
                   label = asin
 
               lines.append(f"**{idx}.{label}**")
-              lines.append(f"**time:** {item.get('time') or ''}")
-              lines.append(f"**total:** {item.get('total') or ''}")
-              lines.append(f"**new_count:** {item.get('new_count') or 0}")
+              lines.append(f"**时间:** {item.get('time') or ''}")
+              lines.append(f"**总数:** {item.get('total') or ''}")
+              lines.append(f"**新增:** {item.get('new_count') or 0}")
               lines.append("")
 
               if item.get("title"):
-                  lines.append(f"**title:** {item.get('title')}")
+                  lines.append(f"**标题:** {item.get('title')}")
               if item.get("content"):
-                  lines.append(f"**content:** {item.get('content')}")
+                  lines.append(f"**内容:** {item.get('content')}")
               if item.get("title_zh"):
-                  lines.append(f"**title_zh:** {item.get('title_zh')}")
+                  lines.append(f"**标题:** {item.get('title_zh')}")
               if item.get("content_zh"):
-                  lines.append(f"**content_zh:** {item.get('content_zh')}")
+                  lines.append(f"**内容:** {item.get('content_zh')}")
               if item.get("summary"):
                   lines.append(f"**summary:** {item.get('summary')}")
               if item.get("tag"):
