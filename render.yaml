@@ -12,7 +12,7 @@ services:
       - key: ARK_API_KEY
         sync: false
       - key: ARK_MODEL
-        value: doubao-1-5-lite-32k-250115
+        value: doubao-seed-2-0-lite-260428
       - key: ARK_BASE_URL
         value: https://ark.cn-beijing.volces.com/api/v3
       - key: MODE

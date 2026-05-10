@@ -50,7 +50,7 @@ STATE_REVIEW_KEYS_LIMIT = 200
 HTTP_RETRIES = 4
 
 ARK_BASE_URL_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3"
-ARK_MODEL_DEFAULT = "doubao-1-5-lite-32k-250115"
+ARK_MODEL_DEFAULT = "doubao-seed-2-0-lite-260428"
 ARK_RETRIES = 4
 ARK_REQUEST_TIMEOUT = 45
 ARK_REQUEST_INTERVAL = 0.35
@@ -77,9 +77,9 @@ class ArkReviewProcessor:
 
     def _chat_url(self) -> str:
         base = (self.base_url or ARK_BASE_URL_DEFAULT).rstrip("/")
-        if base.endswith("/chat/completions"):
+        if base.endswith("/responses"):
             return base
-        return f"{base}/chat/completions"
+        return f"{base}/responses"
 
     @staticmethod
     def _extract_json(content: str) -> dict:
@@ -108,12 +108,20 @@ class ArkReviewProcessor:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        # Ark responses API style:
+        # https://ark.cn-beijing.volces.com/api/v3/responses
         payload = {
             "model": self.model,
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"{system_prompt}\n\n{user_prompt}",
+                        }
+                    ],
+                }
             ],
         }
 
@@ -128,11 +136,17 @@ class ArkReviewProcessor:
                 )
                 response.raise_for_status()
                 data = response.json()
-                content = (
-                    data.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                )
+                content = data.get("output_text", "")
+                if not content:
+                    # Fallback for non-flattened response payloads.
+                    outputs = data.get("output", []) or []
+                    chunks = []
+                    for item in outputs:
+                        for c in item.get("content", []) or []:
+                            text = c.get("text")
+                            if text:
+                                chunks.append(text)
+                    content = "\n".join(chunks).strip()
                 if not content:
                     raise RuntimeError(f"Ark empty response: {data}")
                 return self._extract_json(content)
