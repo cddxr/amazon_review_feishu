@@ -180,10 +180,7 @@ jobs:
         env:
           FEISHU_BASE_WEBHOOK: ${{ secrets.FEISHU_BASE_WEBHOOK }}
         run: |
-          if [ -z "$FEISHU_BASE_WEBHOOK" ]; then
-            echo "Missing GitHub secret: FEISHU_BASE_WEBHOOK"
-            exit 1
-          fi
-          curl -sS -X POST "$FEISHU_BASE_WEBHOOK" \
+          WEBHOOK_URL="${FEISHU_BASE_WEBHOOK:-https://o9xilj84js.feishu.cn/base/workflow/webhook/event/O5ohaBNzbweJCKhiO1McT4I3nTh}"
+          curl -sS -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d @payload.json
