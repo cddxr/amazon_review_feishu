@@ -143,7 +143,6 @@ jobs:
 
               lines.append(f"**{idx}.{label}**")
               lines.append(f"**rating:** {item.get('rating_value')}/{item.get('rating_count') or ''}")
-              lines.append(f"**时间:** {item.get('time') or ''}")
               lines.append(f"**总数:** {item.get('total') or ''}")
               lines.append(f"**新增:** {item.get('new_count') or 0}")
               lines.append("")
