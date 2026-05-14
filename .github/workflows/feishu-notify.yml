@@ -58,10 +58,8 @@ jobs:
             by_asin_rating = {item.get("asin"): item for item in rating_data.get("items", [])}
             by_asin_new = {item.get("asin"): item for item in summary_data.get("asins_with_new_reviews", [])}
   
-            # payload_date = (datetime.utcnow() + timedelta(hours=8, days=1)).strftime("%Y-%m-%d")
-              #@26.5.4 by wsq 获取当下的时间
-            payload_date = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d") 
-          
+            payload_date = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d")
+            
           def normalize_count(text):
               if not text:
                   return None
