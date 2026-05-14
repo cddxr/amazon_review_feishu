@@ -1,4 +1,5 @@
 ﻿name: Feishu New Review Notify
+# minor non-functional note for local sync
 
 on:
   workflow_run:
