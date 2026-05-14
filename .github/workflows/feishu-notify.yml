@@ -1,4 +1,4 @@
-name: Feishu New Review Notify
+﻿name: Feishu New Review Notify
 
 on:
   workflow_run:
@@ -58,8 +58,9 @@ jobs:
           by_asin_rating = {item.get("asin"): item for item in rating_data.get("items", [])}
           by_asin_new = {item.get("asin"): item for item in summary_data.get("asins_with_new_reviews", [])}
 
-          #payload_date = (datetime.utcnow() + timedelta(hours=8, days=1)).strftime("%Y-%m-%d")
-          payload_date = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d") #修改时间
+          # China local date (no +1 day)
+          payload_date = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d")
+
           def normalize_count(text):
               if not text:
                   return None
@@ -70,14 +71,6 @@ jobs:
                   return int(m.group(1).replace(",", ""))
               except Exception:
                   return None
-          #增加星级
-          def star_rating(num):
-            """把数字 rating 转成 ★★★★☆ 形式"""
-            try:
-                num = int(round(num))
-                return "★" * num + "☆" * (5 - num)
-            except:
-                return ""
 
           def fetch_latest_review_total(asin):
               try:
@@ -99,6 +92,7 @@ jobs:
 
               rating_value = rating_item.get("rating_value", "N/A")
               rating_count = normalize_count(rating_item.get("reviews_raw", ""))
+
               review_total = fetch_latest_review_total(asin)
               if review_total is None:
                   try:
@@ -111,17 +105,18 @@ jobs:
               sample = (new_item.get("new_reviews_sample", []) or [])
               first = sample[0] if sample else {}
 
+              title = (first.get("title") or "").strip()
               content_en = (first.get("text") or "").strip()
+              title_zh = (first.get("title_zh") or "").strip()
               content_zh = (first.get("text_zh") or "").strip()
               summary = (first.get("summary_zh") or "").strip()
+              review_score = first.get("rating")
+
               tags = first.get("tags")
               if isinstance(tags, list):
                   tag_text = ",".join([str(x).strip() for x in tags if str(x).strip()])
               else:
                   tag_text = ""
-
-              title = (first.get("title") or "").strip()
-              title_zh = (first.get("title_zh") or "").strip()
 
               items.append({
                   "time": payload_date,
@@ -136,8 +131,8 @@ jobs:
                   "title_zh": title_zh,
                   "content_zh": content_zh,
                   "summary": summary,
+                  "review_score": review_score,
                   "tag": tag_text,
-                  "star": rating
               })
 
           lines = []
@@ -166,10 +161,10 @@ jobs:
                   lines.append(f"**内容:** {item.get('content_zh')}")
               if item.get("summary"):
                   lines.append(f"**summary:** {item.get('summary')}")
+              if item.get("review_score") is not None and str(item.get("review_score")).strip() != "":
+                  lines.append(f"**评论评分:** {item.get('review_score')}/5")
               if item.get("tag"):
                   lines.append(f"**tag:** {item.get('tag')}")
-              if item.get("rating"):
-                  lines.append(f"**星级:** {item.get('rating')}")
               lines.append("")
 
               if idx < len(items):
