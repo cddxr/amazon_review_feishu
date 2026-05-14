@@ -1,4 +1,4 @@
-﻿name: Feishu New Review Notify
+name: Feishu New Review Notify
 
 on:
   workflow_run:
@@ -54,12 +54,12 @@ jobs:
               rating_data = json.load(f)
           with open("summary.json", "r", encoding="utf-8") as f:
               summary_data = json.load(f)
-  
-            by_asin_rating = {item.get("asin"): item for item in rating_data.get("items", [])}
-            by_asin_new = {item.get("asin"): item for item in summary_data.get("asins_with_new_reviews", [])}
-  
-            payload_date = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d")
-            
+
+          by_asin_rating = {item.get("asin"): item for item in rating_data.get("items", [])}
+          by_asin_new = {item.get("asin"): item for item in summary_data.get("asins_with_new_reviews", [])}
+
+          #payload_date = (datetime.utcnow() + timedelta(hours=8, days=1)).strftime("%Y-%m-%d")
+          payload_date = (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d") #修改时间
           def normalize_count(text):
               if not text:
                   return None
@@ -70,6 +70,14 @@ jobs:
                   return int(m.group(1).replace(",", ""))
               except Exception:
                   return None
+          #增加星级
+          def star_rating(num):
+            """把数字 rating 转成 ★★★★☆ 形式"""
+            try:
+                num = int(round(num))
+                return "★" * num + "☆" * (5 - num)
+            except:
+                return ""
 
           def fetch_latest_review_total(asin):
               try:
@@ -129,6 +137,7 @@ jobs:
                   "content_zh": content_zh,
                   "summary": summary,
                   "tag": tag_text,
+                  "star": rating
               })
 
           lines = []
@@ -159,6 +168,8 @@ jobs:
                   lines.append(f"**summary:** {item.get('summary')}")
               if item.get("tag"):
                   lines.append(f"**tag:** {item.get('tag')}")
+              if item.get("rating"):
+                  lines.append(f"**星级:** {item.get('rating')}")
               lines.append("")
 
               if idx < len(items):
