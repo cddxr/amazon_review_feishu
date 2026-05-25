@@ -104,20 +104,30 @@ jobs:
               new_count = int(new_item.get("new_count", 0) or 0)
 
               sample = (new_item.get("new_reviews_sample", []) or [])
-              first = sample[0] if sample else {}
+              reviews = []
+              for review in sample:
+                  title = (review.get("title") or "").strip()
+                  content_en = (review.get("text") or "").strip()
+                  title_zh = (review.get("title_zh") or "").strip()
+                  content_zh = (review.get("text_zh") or "").strip()
+                  summary = (review.get("summary_zh") or "").strip()
+                  review_score = review.get("rating")
 
-              title = (first.get("title") or "").strip()
-              content_en = (first.get("text") or "").strip()
-              title_zh = (first.get("title_zh") or "").strip()
-              content_zh = (first.get("text_zh") or "").strip()
-              summary = (first.get("summary_zh") or "").strip()
-              review_score = first.get("rating")
+                  tags = review.get("tags")
+                  if isinstance(tags, list):
+                      tag_text = ",".join([str(x).strip() for x in tags if str(x).strip()])
+                  else:
+                      tag_text = ""
 
-              tags = first.get("tags")
-              if isinstance(tags, list):
-                  tag_text = ",".join([str(x).strip() for x in tags if str(x).strip()])
-              else:
-                  tag_text = ""
+                  reviews.append({
+                      "title": title,
+                      "content": content_en,
+                      "title_zh": title_zh,
+                      "content_zh": content_zh,
+                      "summary": summary,
+                      "review_score": review_score,
+                      "tag": tag_text,
+                  })
 
               items.append({
                   "time": payload_date,
@@ -127,13 +137,7 @@ jobs:
                   "rating_count": rating_count,
                   "total": review_total,
                   "new_count": new_count,
-                  "title": title,
-                  "content": content_en,
-                  "title_zh": title_zh,
-                  "content_zh": content_zh,
-                  "summary": summary,
-                  "review_score": review_score,
-                  "tag": tag_text,
+                  "reviews": reviews,
               })
 
           lines = []
@@ -152,20 +156,25 @@ jobs:
               lines.append(f"**新增:** {item.get('new_count') or 0}")
               lines.append("")
 
-              if item.get("title"):
-                  lines.append(f"**标题:** {item.get('title')}")
-              if item.get("content"):
-                  lines.append(f"**内容:** {item.get('content')}")
-              if item.get("title_zh"):
-                  lines.append(f"**标题:** {item.get('title_zh')}")
-              if item.get("content_zh"):
-                  lines.append(f"**内容:** {item.get('content_zh')}")
-              if item.get("summary"):
-                  lines.append(f"**summary:** {item.get('summary')}")
-              if item.get("review_score") is not None and str(item.get("review_score")).strip() != "":
-                  lines.append(f"**评论评分:** {item.get('review_score')}/5")
-              if item.get("tag"):
-                  lines.append(f"**tag:** {item.get('tag')}")
+              reviews = item.get("reviews") or []
+              if reviews:
+                  for r_idx, review in enumerate(reviews, start=1):
+                      lines.append(f"**评论{r_idx}:**")
+                      if review.get("title"):
+                          lines.append(f"**标题:** {review.get('title')}")
+                      if review.get("content"):
+                          lines.append(f"**内容:** {review.get('content')}")
+                      if review.get("title_zh"):
+                          lines.append(f"**标题:** {review.get('title_zh')}")
+                      if review.get("content_zh"):
+                          lines.append(f"**内容:** {review.get('content_zh')}")
+                      if review.get("summary"):
+                          lines.append(f"**summary:** {review.get('summary')}")
+                      if review.get("review_score") is not None and str(review.get("review_score")).strip() != "":
+                          lines.append(f"**评论评分:** {review.get('review_score')}/5")
+                      if review.get("tag"):
+                          lines.append(f"**tag:** {review.get('tag')}")
+                      lines.append("")
               lines.append("")
 
               if idx < len(items):
