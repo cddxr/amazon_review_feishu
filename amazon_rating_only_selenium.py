@@ -103,6 +103,14 @@ def find_text(driver: webdriver.Chrome, selectors: list[tuple[str, str]]) -> str
                 EC.presence_of_element_located((by, selector))
             )
             text = (el.text or "").strip()
+            if not text:
+                for attr in ("aria-label", "title", "data-tooltip", "textContent"):
+                    try:
+                        text = (el.get_attribute(attr) or "").strip()
+                    except Exception:
+                        continue
+                    if text:
+                        break
             if text:
                 return text
         except Exception:
@@ -130,10 +138,19 @@ def scrape_rating_and_reviews(driver: webdriver.Chrome, asin: str) -> dict:
         driver,
         [
             (By.CSS_SELECTOR, "span[data-hook='rating-out-of-text']"),
+            (By.CSS_SELECTOR, "i[data-hook='average-star-rating'] .a-icon-alt"),
+            (By.CSS_SELECTOR, "#averageCustomerReviews .a-icon-alt"),
             (By.CSS_SELECTOR, "#acrPopover .a-size-base.a-color-base"),
             (By.CSS_SELECTOR, "#acrPopover .a-icon-alt"),
+            (By.CSS_SELECTOR, "span.a-icon-alt"),
         ],
     )
+    if rating_text == "未找到":
+        page_src = driver.page_source or ""
+        m = re.search(r"([0-5](?:\.\d+)?)\s+out of 5 stars", page_src, re.I)
+        if m:
+            rating_text = m.group(1)
+
     review_text = find_text(
         driver,
         [

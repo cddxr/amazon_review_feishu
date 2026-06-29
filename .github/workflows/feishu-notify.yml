@@ -73,6 +73,34 @@ jobs:
               except Exception:
                   return None
 
+          def normalize_review_score(value):
+              if value is None:
+                  return None
+              if isinstance(value, (int, float)):
+                  score = float(value)
+              else:
+                  m = re.search(r"(\d+(?:\.\d+)?)", str(value))
+                  if not m:
+                      return None
+                  try:
+                      score = float(m.group(1))
+                  except Exception:
+                      return None
+              if score < 0:
+                  score = 0.0
+              if score > 5:
+                  score = 5.0
+              return score
+
+          def render_review_score(value):
+              score = normalize_review_score(value)
+              if score is None:
+                  return ""
+              full_stars = max(0, min(5, int(round(score))))
+              star_text = ("★" * full_stars) + ("☆" * (5 - full_stars))
+              score_text = str(int(score)) if score.is_integer() else f"{score:.1f}"
+              return f"{star_text} ({score_text}/5)"
+
           def fetch_latest_review_total(asin):
               try:
                   query = urllib.parse.urlencode({"asin": asin})
@@ -111,7 +139,7 @@ jobs:
                   title_zh = (review.get("title_zh") or "").strip()
                   content_zh = (review.get("text_zh") or "").strip()
                   summary = (review.get("summary_zh") or "").strip()
-                  review_score = review.get("rating")
+                  review_score = render_review_score(review.get("rating"))
 
                   tags = review.get("tags")
                   if isinstance(tags, list):
@@ -170,8 +198,8 @@ jobs:
                           lines.append(f"**内容:** {review.get('content_zh')}")
                       if review.get("summary"):
                           lines.append(f"**summary:** {review.get('summary')}")
-                      if review.get("review_score") is not None and str(review.get("review_score")).strip() != "":
-                          lines.append(f"**评论评分:** {review.get('review_score')}/5")
+                      if review.get("review_score"):
+                          lines.append(f"**评论评分:** {review.get('review_score')}")
                       if review.get("tag"):
                           lines.append(f"**tag:** {review.get('tag')}")
                       lines.append("")
