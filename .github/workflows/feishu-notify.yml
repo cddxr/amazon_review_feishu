@@ -48,7 +48,7 @@ jobs:
           BASE_URL = "https://amazon-review-feishu.onrender.com"
           NAME_TO_ASIN = {
               "VP218": "B0F8HXNY5N",
-              "XG001": "B0FQCBMFYQ",
+              # "XG001": "B0FQCBMFYQ",
           }
 
           with open("rating.json", "r", encoding="utf-8") as f:
