@@ -662,7 +662,7 @@ def run_once(
 
 
 if __name__ == "__main__":
-    ASIN = get_env("ASIN", required=False, default="B0G64PSMX4")
+    ASIN = get_env("ASIN", required=False, default="B0FRSHR4CP")
     MODE = get_env("MODE", required=False, default="max")
     TRANSLATE_MODE = get_env("TRANSLATE_MODE", required=False, default="full")
 

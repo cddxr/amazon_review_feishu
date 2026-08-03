@@ -16,11 +16,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 
 PRODUCTS = {
-    "VP203": "B0DDCJFFBM",
-    "VP204": "B0DFBMVX7T",
-    "VP218": "B0F8HXNY5N",
-    "XG001": "B0FQCBMFYQ",
-    "B0FRSHR4CP": "B0FRSHR4CP",
+    "XG002": "B0FRSHR4CP",
 }
 
 WAIT_LONG = 25

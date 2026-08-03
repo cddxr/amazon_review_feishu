@@ -14,9 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         asin:
-          - B0F8HXNY5N # VP218
-          - B0FQCBMFYQ # XG001
-          - B0FRSHR4CP
+          - B0FRSHR4CP # XG002
     steps:
       - name: Trigger async sync and wait completion
         run: |

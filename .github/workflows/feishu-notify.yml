@@ -47,9 +47,7 @@ jobs:
 
           BASE_URL = "https://amazon-review-feishu.onrender.com"
           NAME_TO_ASIN = {
-              "VP218": "B0F8HXNY5N",
-              # "XG001": "B0FQCBMFYQ",
-              "B0FRSHR4CP": "B0FRSHR4CP",
+              "XG002": "B0FRSHR4CP",
           }
 
           with open("rating.json", "r", encoding="utf-8") as f:
@@ -172,12 +170,7 @@ jobs:
           lines = []
           for idx, item in enumerate(items, start=1):
               asin = item.get("asin") or ""
-              if asin == "B0F8HXNY5N":
-                  label = "VP218 蘑菇可可.B0F8HXNY5N"
-              elif asin == "B0FQCBMFYQ":
-                  label = "XG001 蛋白质咖啡.B0FQCBMFYQ"
-              else:
-                  label = asin
+              label = "XG002.B0FRSHR4CP"
 
               lines.append(f"**{idx}.{label}**")
               lines.append(f"**rating:** {item.get('rating_value')}/{item.get('rating_count') or ''}")
