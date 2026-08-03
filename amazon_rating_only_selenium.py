@@ -116,7 +116,7 @@ def find_text(driver: webdriver.Chrome, selectors: list[tuple[str, str]]) -> str
                 return text
         except Exception:
             continue
-    return "???"
+    return "未找到"
 
 
 def parse_first_number(text: str) -> str:
@@ -146,7 +146,7 @@ def scrape_rating_and_reviews(driver: webdriver.Chrome, asin: str) -> dict:
             (By.CSS_SELECTOR, "span.a-icon-alt"),
         ],
     )
-    if rating_text == "???":
+    if rating_text == "未找到":
         page_src = driver.page_source or ""
         m = re.search(r"([0-5](?:\.\d+)?)\s+out of 5 stars", page_src, re.I)
         if m:
@@ -178,9 +178,9 @@ def scrape_with_retry(driver: webdriver.Chrome, asin: str) -> dict:
             time.sleep(1.5 * (attempt + 1))
     return {
         "asin": asin,
-        "rating_raw": "???",
-        "rating_value": "???",
-        "reviews_raw": "???",
+        "rating_raw": "未找到",
+        "rating_value": "未找到",
+        "reviews_raw": "未找到",
         "error": last_error or "unknown error",
     }
 
