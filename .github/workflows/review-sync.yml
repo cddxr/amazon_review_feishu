@@ -9,7 +9,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -39,8 +39,8 @@ jobs:
           task_id = payload["task_id"]
           print(f"[{asin}] task_id={task_id}")
 
-          # Wait until done. Poll every 20s, up to 90 minutes.
-          max_rounds = 270
+          # Wait until done. Poll every 20s, up to 350 minutes.
+          max_rounds = 1050
           for i in range(max_rounds):
               check_url = f"{base}/reviews/sync/tasks/{task_id}"
               with urllib.request.urlopen(check_url, timeout=60) as resp:
