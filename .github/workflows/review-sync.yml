@@ -16,6 +16,7 @@ jobs:
         asin:
           - B0F8HXNY5N # VP218
           - B0FQCBMFYQ # XG001
+          - B0FRSHR4CP
     steps:
       - name: Trigger async sync and wait completion
         run: |

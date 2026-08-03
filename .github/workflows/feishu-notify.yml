@@ -1,4 +1,4 @@
-﻿name: Feishu New Review Notify
+name: Feishu New Review Notify
 # minor non-functional note for local sync
 
 on:
@@ -49,6 +49,7 @@ jobs:
           NAME_TO_ASIN = {
               "VP218": "B0F8HXNY5N",
               # "XG001": "B0FQCBMFYQ",
+              "B0FRSHR4CP": "B0FRSHR4CP",
           }
 
           with open("rating.json", "r", encoding="utf-8") as f:
@@ -97,7 +98,7 @@ jobs:
               if score is None:
                   return ""
               full_stars = max(0, min(5, int(round(score))))
-              star_text = ("★" * full_stars) + ("☆" * (5 - full_stars))
+              star_text = ("?" * full_stars) + ("?" * (5 - full_stars))
               score_text = str(int(score)) if score.is_integer() else f"{score:.1f}"
               return f"{star_text} ({score_text}/5)"
 
@@ -172,41 +173,41 @@ jobs:
           for idx, item in enumerate(items, start=1):
               asin = item.get("asin") or ""
               if asin == "B0F8HXNY5N":
-                  label = "VP218 蘑菇可可.B0F8HXNY5N"
+                  label = "VP218 ????.B0F8HXNY5N"
               elif asin == "B0FQCBMFYQ":
-                  label = "XG001 蛋白质咖啡.B0FQCBMFYQ"
+                  label = "XG001 ?????.B0FQCBMFYQ"
               else:
                   label = asin
 
               lines.append(f"**{idx}.{label}**")
               lines.append(f"**rating:** {item.get('rating_value')}/{item.get('rating_count') or ''}")
-              lines.append(f"**总数:** {item.get('total') or ''}")
-              lines.append(f"**新增:** {item.get('new_count') or 0}")
+              lines.append(f"**??:** {item.get('total') or ''}")
+              lines.append(f"**??:** {item.get('new_count') or 0}")
               lines.append("")
 
               reviews = item.get("reviews") or []
               if reviews:
                   for r_idx, review in enumerate(reviews, start=1):
-                      lines.append(f"**评论{r_idx}:**")
+                      lines.append(f"**??{r_idx}:**")
                       if review.get("title"):
-                          lines.append(f"**标题:** {review.get('title')}")
+                          lines.append(f"**??:** {review.get('title')}")
                       if review.get("content"):
-                          lines.append(f"**内容:** {review.get('content')}")
+                          lines.append(f"**??:** {review.get('content')}")
                       if review.get("title_zh"):
-                          lines.append(f"**标题:** {review.get('title_zh')}")
+                          lines.append(f"**??:** {review.get('title_zh')}")
                       if review.get("content_zh"):
-                          lines.append(f"**内容:** {review.get('content_zh')}")
+                          lines.append(f"**??:** {review.get('content_zh')}")
                       if review.get("summary"):
                           lines.append(f"**summary:** {review.get('summary')}")
                       if review.get("review_score"):
-                          lines.append(f"**评论评分:** {review.get('review_score')}")
+                          lines.append(f"**????:** {review.get('review_score')}")
                       if review.get("tag"):
                           lines.append(f"**tag:** {review.get('tag')}")
                       lines.append("")
               lines.append("")
 
               if idx < len(items):
-                  lines.append("────────────────────────────────")
+                  lines.append("????????????????????????????????")
                   lines.append("")
 
           body_text = "\n".join(lines).strip()

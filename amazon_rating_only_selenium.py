@@ -20,6 +20,7 @@ PRODUCTS = {
     "VP204": "B0DFBMVX7T",
     "VP218": "B0F8HXNY5N",
     "XG001": "B0FQCBMFYQ",
+    "B0FRSHR4CP": "B0FRSHR4CP",
 }
 
 WAIT_LONG = 25
@@ -115,7 +116,7 @@ def find_text(driver: webdriver.Chrome, selectors: list[tuple[str, str]]) -> str
                 return text
         except Exception:
             continue
-    return "未找到"
+    return "???"
 
 
 def parse_first_number(text: str) -> str:
@@ -145,7 +146,7 @@ def scrape_rating_and_reviews(driver: webdriver.Chrome, asin: str) -> dict:
             (By.CSS_SELECTOR, "span.a-icon-alt"),
         ],
     )
-    if rating_text == "未找到":
+    if rating_text == "???":
         page_src = driver.page_source or ""
         m = re.search(r"([0-5](?:\.\d+)?)\s+out of 5 stars", page_src, re.I)
         if m:
@@ -177,9 +178,9 @@ def scrape_with_retry(driver: webdriver.Chrome, asin: str) -> dict:
             time.sleep(1.5 * (attempt + 1))
     return {
         "asin": asin,
-        "rating_raw": "未找到",
-        "rating_value": "未找到",
-        "reviews_raw": "未找到",
+        "rating_raw": "???",
+        "rating_value": "???",
+        "reviews_raw": "???",
         "error": last_error or "unknown error",
     }
 
