@@ -10,42 +10,38 @@ on:
 jobs:
   notify:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, amazon-review-feishu]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Setup Chrome
-        uses: browser-actions/setup-chrome@v1
-
-      - name: Install selenium
-        run: |
-          python -m pip install --upgrade pip
-          pip install selenium
+      - name: Verify local Python and Selenium
+        shell: cmd
+        run: '"C:\Users\cddxr\AppData\Local\Programs\Python\Python313\python.exe" -c "import selenium"'
 
       - name: Fetch rating/review snapshot
-        run: |
-          python amazon_rating_only_selenium.py > rating.json || echo "{\"items\": []}" > rating.json
+        shell: cmd
+        env:
+          HEADLESS: "1"
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+          CHROME_BINARY_PATH: C:\Program Files\Google\Chrome\Application\chrome.exe
+          AMAZON_PROFILE_DIR: E:\amazon_data\amazon-review-profile
+        run: '"C:\Users\cddxr\AppData\Local\Programs\Python\Python313\python.exe" amazon_rating_only_selenium.py > rating.json || echo {"items": []} > rating.json'
 
       - name: Fetch new-review summary
+        shell: bash
         run: |
           curl -sS "https://amazon-review-feishu.onrender.com/reviews/sync/runs/new?hours=12&limit=200&include_content=true&sample_size=2" -o summary.json
 
       - name: Build Feishu card payload
+        shell: bash
         run: |
-          python - << 'PY'
+          "C:/Users/cddxr/AppData/Local/Programs/Python/Python313/python.exe" - << 'PY'
           import json
           import re
-          import urllib.parse
-          import urllib.request
           from datetime import datetime, timedelta
 
-          BASE_URL = "https://amazon-review-feishu.onrender.com"
           NAME_TO_ASIN = {
               "XG002": "B0FRSHR4CP",
           }
@@ -100,15 +96,6 @@ jobs:
               score_text = str(int(score)) if score.is_integer() else f"{score:.1f}"
               return f"{star_text} ({score_text}/5)"
 
-          def fetch_latest_review_state(asin):
-              try:
-                  query = urllib.parse.urlencode({"asin": asin})
-                  url = f"{BASE_URL}/reviews/sync/state?{query}"
-                  with urllib.request.urlopen(url, timeout=30) as resp:
-                      return json.loads(resp.read().decode("utf-8"))
-              except Exception:
-                  return {}
-
           def is_missing_rating(value):
               return str(value or "").strip().lower() in {
                   "", "n/a", "none", "null", "未找到"
@@ -127,23 +114,16 @@ jobs:
 
               rating_value = rating_item.get("rating_value", "N/A")
               rating_count = normalize_count(rating_item.get("reviews_raw", ""))
-
-              review_state = fetch_latest_review_state(asin)
-              review_total = review_state.get("last_total_reviews")
-              try:
-                  review_total = int(review_total) if review_total is not None else None
-              except Exception:
-                  review_total = None
-              if review_total is None:
-                  try:
-                      review_total = int(new_item.get("current_total"))
-                  except Exception:
-                      review_total = None
+              review_total = normalize_count(
+                  rating_item.get("customer_reviews_raw", "")
+              )
 
               if is_missing_rating(rating_value):
                   rating_value = "未找到"
               if rating_count is None:
                   rating_count = "未找到"
+              if review_total is None:
+                  review_total = "未找到"
 
               new_count = int(new_item.get("new_count", 0) or 0)
 
@@ -251,6 +231,7 @@ jobs:
           PY
 
       - name: Send to Feishu webhook
+        shell: bash
         run: |
           WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/b2b81928-7d95-486e-9e39-a6bc6f58a456"
           resp=$(curl -sS -X POST "$WEBHOOK_URL" \

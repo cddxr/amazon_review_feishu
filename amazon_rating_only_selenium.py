@@ -10,6 +10,7 @@ import urllib.request
 from datetime import datetime
 
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -40,14 +41,26 @@ def build_driver() -> webdriver.Chrome:
     options = Options()
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--headless=new")
+    if os.getenv("HEADLESS", "1").strip() != "0":
+        options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument(f"--user-agent={HTTP_HEADERS['User-Agent']}")
     options.add_argument("--lang=en-US")
 
-    chrome_binary = os.getenv("CHROME_BINARY", "").strip()
+    profile_dir = os.getenv("AMAZON_PROFILE_DIR", "").strip()
+    if profile_dir:
+        options.add_argument(f"--user-data-dir={os.path.abspath(profile_dir)}")
+
+    proxy_server = os.getenv("AMAZON_PROXY_SERVER", "").strip()
+    if proxy_server:
+        options.add_argument(f"--proxy-server={proxy_server}")
+
+    chrome_binary = (
+        os.getenv("CHROME_BINARY_PATH", "").strip()
+        or os.getenv("CHROME_BINARY", "").strip()
+    )
     if chrome_binary:
         options.binary_location = chrome_binary
 
@@ -168,6 +181,51 @@ def extract_review_count_from_html(page_source: str) -> str:
     return NOT_FOUND
 
 
+def extract_customer_review_count(*texts: str) -> str:
+    """Extract the written-review count from the logged-in Portal page."""
+    patterns = [
+        r"(?<![\d,])(\d[\d,]*)\s+customer reviews?",
+        r"(?<![\d,])(\d[\d,]*)\s+with reviews?",
+    ]
+    for text in texts:
+        source = html.unescape(text or "")
+        for pattern in patterns:
+            match = re.search(pattern, source, re.I)
+            if match:
+                return match.group(1).replace(",", "")
+    return NOT_FOUND
+
+
+def scrape_customer_review_count(driver: webdriver.Chrome, asin: str) -> str:
+    url = (
+        f"https://www.amazon.com/portal/customer-reviews/{asin}/"
+        "ref=cm_cr_arp_d_viewopt_sr?ie=UTF8&filterByStar=all_stars"
+        "&reviewerType=all_reviews&sortBy=recent#reviews-filter-bar"
+    )
+    driver.set_page_load_timeout(35)
+    try:
+        driver.get(url)
+    except TimeoutException:
+        # Amazon may leave background resources loading after the useful DOM exists.
+        pass
+    handle_continue_pages(driver)
+
+    for _ in range(4):
+        try:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        time.sleep(1.5)
+        try:
+            body_text = driver.find_element(By.TAG_NAME, "body").text
+        except Exception:
+            body_text = ""
+        count = extract_customer_review_count(body_text, driver.page_source or "")
+        if count != NOT_FOUND:
+            return count
+    return NOT_FOUND
+
+
 def fetch_amazon_frontend_snapshot(asin: str) -> dict:
     """Read rating and review count only from public Amazon frontend HTML."""
     urls = [
@@ -179,6 +237,7 @@ def fetch_amazon_frontend_snapshot(asin: str) -> dict:
         "rating_raw": NOT_FOUND,
         "rating_value": NOT_FOUND,
         "reviews_raw": NOT_FOUND,
+        "customer_reviews_raw": NOT_FOUND,
         "rating_source": "amazon_frontend",
     }
     errors = []
@@ -262,29 +321,31 @@ def scrape_rating_and_reviews(driver: webdriver.Chrome, asin: str) -> dict:
 def scrape_with_retry(driver: webdriver.Chrome, asin: str) -> dict:
     last_error = None
     frontend_result = fetch_amazon_frontend_snapshot(asin)
-    if (
-        frontend_result.get("rating_value") != NOT_FOUND
-        and frontend_result.get("reviews_raw") != NOT_FOUND
-    ):
-        return frontend_result
-
     last_result = frontend_result
     for attempt in range(RETRIES_PER_ASIN):
         try:
-            browser_result = scrape_rating_and_reviews(driver, asin)
-            if browser_result.get("rating_value") == NOT_FOUND:
-                browser_result["rating_raw"] = frontend_result.get("rating_raw", NOT_FOUND)
-                browser_result["rating_value"] = frontend_result.get("rating_value", NOT_FOUND)
-            if browser_result.get("reviews_raw") == NOT_FOUND:
-                browser_result["reviews_raw"] = frontend_result.get("reviews_raw", NOT_FOUND)
-            browser_result["rating_source"] = "amazon_frontend"
-            last_result = browser_result
+            if (
+                frontend_result.get("rating_value") == NOT_FOUND
+                or frontend_result.get("reviews_raw") == NOT_FOUND
+            ):
+                browser_result = scrape_rating_and_reviews(driver, asin)
+                if frontend_result.get("rating_value") == NOT_FOUND:
+                    frontend_result["rating_raw"] = browser_result.get("rating_raw", NOT_FOUND)
+                    frontend_result["rating_value"] = browser_result.get("rating_value", NOT_FOUND)
+                if frontend_result.get("reviews_raw") == NOT_FOUND:
+                    frontend_result["reviews_raw"] = browser_result.get("reviews_raw", NOT_FOUND)
+
+            frontend_result["customer_reviews_raw"] = scrape_customer_review_count(
+                driver, asin
+            )
+            last_result = frontend_result
             if (
                 last_result.get("rating_value") != NOT_FOUND
                 and last_result.get("reviews_raw") != NOT_FOUND
+                and last_result.get("customer_reviews_raw") != NOT_FOUND
             ):
                 return last_result
-            last_error = last_result.get("warning") or "Amazon rating was not found"
+            last_error = "Amazon frontend rating or customer-review count was not found"
         except Exception as e:
             last_error = str(e)
         time.sleep(1.5 * (attempt + 1))
@@ -294,6 +355,7 @@ def scrape_with_retry(driver: webdriver.Chrome, asin: str) -> dict:
         "rating_raw": NOT_FOUND,
         "rating_value": NOT_FOUND,
         "reviews_raw": NOT_FOUND,
+        "customer_reviews_raw": NOT_FOUND,
         "rating_source": "amazon_frontend",
     }
     result["error"] = last_error or result.get("error") or "Amazon frontend data not found"
@@ -303,6 +365,10 @@ def scrape_with_retry(driver: webdriver.Chrome, asin: str) -> dict:
 def main():
     driver = build_driver()
     try:
+        if os.getenv("AMAZON_LOGIN_BEFORE_SCRAPING", "0").strip() == "1":
+            driver.get("https://www.amazon.com/")
+            input("请在打开的 Chrome 中完成 Amazon 登录，然后回到终端按 Enter：")
+
         zipcode = os.getenv("AMAZON_ZIPCODE", "").strip()
         if zipcode:
             # Optional only. Default path skips zipcode to reduce flakiness in CI.
