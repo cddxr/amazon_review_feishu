@@ -16,47 +16,10 @@ from uuid import uuid4
 load_dotenv()
 
 app = FastAPI()
-SUPABASE_PAGE_SIZE = 1000
 
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
-
-
-def normalize_rating(value):
-    try:
-        rating = float(value)
-    except (TypeError, ValueError):
-        return None
-    return rating if 0 <= rating <= 5 else None
-
-
-def get_stored_rating_summary(supabase, asin: str):
-    ratings = []
-    start = 0
-    while True:
-        end = start + SUPABASE_PAGE_SIZE - 1
-        result = (
-            supabase.table("reviews")
-            .select("rating")
-            .eq("asin", asin)
-            .range(start, end)
-            .execute()
-        )
-        rows = result.data or []
-        ratings.extend(
-            rating
-            for rating in (normalize_rating(row.get("rating")) for row in rows)
-            if rating is not None
-        )
-        if len(rows) < SUPABASE_PAGE_SIZE:
-            break
-        start += SUPABASE_PAGE_SIZE
-
-    return {
-        "average_rating": round(sum(ratings) / len(ratings), 1) if ratings else None,
-        "rated_review_count": len(ratings),
-    }
 
 
 def review_date_sort_key(review):
@@ -259,7 +222,7 @@ def get_sync_state(asin: str = Query(..., description="Amazon ASIN")):
     rows = result.data or []
     if not rows:
         raise HTTPException(status_code=404, detail={"error": "ASIN state not found"})
-    return {**rows[0], **get_stored_rating_summary(supabase, asin)}
+    return rows[0]
 
 
 @app.get("/reviews/sync/runs/new")
