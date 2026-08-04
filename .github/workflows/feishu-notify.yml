@@ -141,18 +141,9 @@ jobs:
                       review_total = None
 
               if is_missing_rating(rating_value):
-                  rating_value = review_state.get("average_rating")
-              if is_missing_rating(rating_value):
                   rating_value = "未找到"
-              if rating_item.get("rating_source") == "review_average_fallback":
-                  stored_average = review_state.get("average_rating")
-                  if not is_missing_rating(stored_average):
-                      rating_value = stored_average
-                  rating_count = normalize_count(review_state.get("rated_review_count"))
               if rating_count is None:
-                  rating_count = normalize_count(review_state.get("rated_review_count"))
-              if rating_count is None:
-                  rating_count = review_total
+                  rating_count = "未找到"
 
               new_count = int(new_item.get("new_count", 0) or 0)
 
@@ -201,7 +192,7 @@ jobs:
               label = "XG002.B0FRSHR4CP"
 
               lines.append(f"**{idx}.{label}**")
-              lines.append(f"**rating:** {item.get('rating_value')}/{item.get('rating_count') or ''}")
+              lines.append(f"**rating:** {item.get('rating_value')}/{item.get('rating_count')}")
               lines.append(f"**总数:** {item.get('total') or ''}")
               lines.append(f"**新增:** {item.get('new_count') or 0}")
               lines.append("")

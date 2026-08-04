@@ -6,7 +6,6 @@ import html
 import os
 import re
 import time
-import urllib.parse
 import urllib.request
 from datetime import datetime
 
@@ -26,13 +25,13 @@ WAIT_LONG = 25
 WAIT_SHORT = 8
 RETRIES_PER_ASIN = 3
 NOT_FOUND = "未找到"
-WOOT_REVIEWS_URL = "https://www.woot.com/review/Reviews/"
 HTTP_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
     ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
 
@@ -158,7 +157,8 @@ def extract_review_count_from_html(page_source: str) -> str:
         r'"reviewCount"\s*:\s*"?([\d,]+)',
         r'"ratingCount"\s*:\s*"?([\d,]+)',
         r'"totalReviewCount"\s*:\s*"?([\d,]+)',
-        r'id=["\']acrCustomerReviewText["\'][^>]*>\s*([\d,]+)',
+        r'id=["\']acrCustomerReviewText["\'][^>]*aria-label=["\']([\d,]+)\s+Reviews?',
+        r'id=["\']acrCustomerReviewText["\'][^>]*>\s*\(?([\d,]+)\)?',
         r'([\d,]+)\s+(?:global\s+)?ratings?',
     ]
     for pattern in patterns:
@@ -168,54 +168,50 @@ def extract_review_count_from_html(page_source: str) -> str:
     return NOT_FOUND
 
 
-def fetch_review_rating_fallback(asin: str) -> tuple[str, str]:
-    """Calculate a rating/count fallback from the review feed used by sync."""
-    ratings: list[float] = []
-    seen: set[str] = set()
-    paging_next = ""
+def fetch_amazon_frontend_snapshot(asin: str) -> dict:
+    """Read rating and review count only from public Amazon frontend HTML."""
+    urls = [
+        f"https://www.amazon.com/dp/{asin}?th=1&psc=1",
+        f"https://www.amazon.com/gp/product/{asin}?th=1&psc=1",
+    ]
+    best = {
+        "asin": asin,
+        "rating_raw": NOT_FOUND,
+        "rating_value": NOT_FOUND,
+        "reviews_raw": NOT_FOUND,
+        "rating_source": "amazon_frontend",
+    }
+    errors = []
 
-    for _ in range(100):
-        params = {"filter": "0", "isVerified": "false", "sort": "0"}
-        if paging_next:
-            params["pagingNext"] = paging_next
-        else:
-            params["page"] = "1"
-        url = f"{WOOT_REVIEWS_URL}{asin}?{urllib.parse.urlencode(params)}"
-        request = urllib.request.Request(
-            url,
-            headers={**HTTP_HEADERS, "Accept": "application/json", "Referer": f"https://www.woot.com/review/{asin}"},
-        )
-        with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-
-        batch = payload.get("Reviews", []) or []
-        if not batch:
-            break
-        for review in batch:
-            key = str(
-                review.get("ReviewId")
-                or review.get("Id")
-                or "||".join(
-                    str(review.get(field, "") or "")
-                    for field in ("Author", "Title", "Text", "OverallRating")
-                )
+    for url in urls:
+        try:
+            request = urllib.request.Request(
+                url,
+                headers={**HTTP_HEADERS, "Referer": "https://www.amazon.com/"},
             )
-            if key in seen:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                page_source = response.read().decode("utf-8", errors="replace")
+
+            if "enter the characters you see below" in page_source.lower():
+                errors.append(f"{url}: Amazon anti-bot challenge")
                 continue
-            seen.add(key)
-            try:
-                ratings.append(float(review.get("OverallRating")))
-            except (TypeError, ValueError):
-                pass
 
-        paging_next = str(payload.get("PagingNext", "") or "")
-        if not paging_next:
-            break
+            rating = extract_rating_from_html(page_source)
+            review_count = extract_review_count_from_html(page_source)
+            if rating != NOT_FOUND:
+                best["rating_raw"] = rating
+                best["rating_value"] = rating
+            if review_count != NOT_FOUND:
+                best["reviews_raw"] = review_count
+            if rating != NOT_FOUND and review_count != NOT_FOUND:
+                best["frontend_url"] = url
+                return best
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
 
-    if not ratings:
-        return NOT_FOUND, str(len(seen)) if seen else NOT_FOUND
-    average = sum(ratings) / len(ratings)
-    return f"{average:.1f}", str(len(seen))
+    if errors:
+        best["error"] = "; ".join(errors)
+    return best
 
 
 def scrape_rating_and_reviews(driver: webdriver.Chrome, asin: str) -> dict:
@@ -265,37 +261,42 @@ def scrape_rating_and_reviews(driver: webdriver.Chrome, asin: str) -> dict:
 
 def scrape_with_retry(driver: webdriver.Chrome, asin: str) -> dict:
     last_error = None
-    last_result = None
+    frontend_result = fetch_amazon_frontend_snapshot(asin)
+    if (
+        frontend_result.get("rating_value") != NOT_FOUND
+        and frontend_result.get("reviews_raw") != NOT_FOUND
+    ):
+        return frontend_result
+
+    last_result = frontend_result
     for attempt in range(RETRIES_PER_ASIN):
         try:
-            last_result = scrape_rating_and_reviews(driver, asin)
-            if last_result.get("rating_value") != NOT_FOUND:
+            browser_result = scrape_rating_and_reviews(driver, asin)
+            if browser_result.get("rating_value") == NOT_FOUND:
+                browser_result["rating_raw"] = frontend_result.get("rating_raw", NOT_FOUND)
+                browser_result["rating_value"] = frontend_result.get("rating_value", NOT_FOUND)
+            if browser_result.get("reviews_raw") == NOT_FOUND:
+                browser_result["reviews_raw"] = frontend_result.get("reviews_raw", NOT_FOUND)
+            browser_result["rating_source"] = "amazon_frontend"
+            last_result = browser_result
+            if (
+                last_result.get("rating_value") != NOT_FOUND
+                and last_result.get("reviews_raw") != NOT_FOUND
+            ):
                 return last_result
             last_error = last_result.get("warning") or "Amazon rating was not found"
         except Exception as e:
             last_error = str(e)
         time.sleep(1.5 * (attempt + 1))
 
-    try:
-        fallback_rating, fallback_count = fetch_review_rating_fallback(asin)
-    except Exception as exc:
-        fallback_rating, fallback_count = NOT_FOUND, NOT_FOUND
-        last_error = f"{last_error or 'Amazon lookup failed'}; review fallback failed: {exc}"
-
     result = last_result or {
         "asin": asin,
         "rating_raw": NOT_FOUND,
         "rating_value": NOT_FOUND,
         "reviews_raw": NOT_FOUND,
+        "rating_source": "amazon_frontend",
     }
-    if result.get("rating_value") == NOT_FOUND and fallback_rating != NOT_FOUND:
-        result["rating_raw"] = fallback_rating
-        result["rating_value"] = fallback_rating
-        result["rating_source"] = "review_average_fallback"
-    if result.get("reviews_raw") == NOT_FOUND and fallback_count != NOT_FOUND:
-        result["reviews_raw"] = fallback_count
-    if result.get("rating_value") == NOT_FOUND:
-        result["error"] = last_error or "unknown error"
+    result["error"] = last_error or result.get("error") or "Amazon frontend data not found"
     return result
 
 
