@@ -100,18 +100,25 @@ jobs:
               score_text = str(int(score)) if score.is_integer() else f"{score:.1f}"
               return f"{star_text} ({score_text}/5)"
 
-          def fetch_latest_review_total(asin):
+          def fetch_latest_review_state(asin):
               try:
                   query = urllib.parse.urlencode({"asin": asin})
                   url = f"{BASE_URL}/reviews/sync/state?{query}"
                   with urllib.request.urlopen(url, timeout=30) as resp:
-                      payload = json.loads(resp.read().decode("utf-8"))
-                  value = payload.get("last_total_reviews")
-                  if value is None:
-                      return None
-                  return int(value)
+                      return json.loads(resp.read().decode("utf-8"))
               except Exception:
-                  return None
+                  return {}
+
+          def is_missing_rating(value):
+              return str(value or "").strip().lower() in {
+                  "", "n/a", "none", "null", "未找到"
+              }
+
+          def distinct_translation(original, translated):
+              original = (original or "").strip()
+              translated = (translated or "").strip()
+              normalize = lambda text: re.sub(r"\s+", " ", text).casefold()
+              return "" if normalize(original) == normalize(translated) else translated
 
           items = []
           for name, asin in NAME_TO_ASIN.items():
@@ -121,12 +128,31 @@ jobs:
               rating_value = rating_item.get("rating_value", "N/A")
               rating_count = normalize_count(rating_item.get("reviews_raw", ""))
 
-              review_total = fetch_latest_review_total(asin)
+              review_state = fetch_latest_review_state(asin)
+              review_total = review_state.get("last_total_reviews")
+              try:
+                  review_total = int(review_total) if review_total is not None else None
+              except Exception:
+                  review_total = None
               if review_total is None:
                   try:
                       review_total = int(new_item.get("current_total"))
                   except Exception:
                       review_total = None
+
+              if is_missing_rating(rating_value):
+                  rating_value = review_state.get("average_rating")
+              if is_missing_rating(rating_value):
+                  rating_value = "未找到"
+              if rating_item.get("rating_source") == "review_average_fallback":
+                  stored_average = review_state.get("average_rating")
+                  if not is_missing_rating(stored_average):
+                      rating_value = stored_average
+                  rating_count = normalize_count(review_state.get("rated_review_count"))
+              if rating_count is None:
+                  rating_count = normalize_count(review_state.get("rated_review_count"))
+              if rating_count is None:
+                  rating_count = review_total
 
               new_count = int(new_item.get("new_count", 0) or 0)
 
@@ -137,6 +163,8 @@ jobs:
                   content_en = (review.get("text") or "").strip()
                   title_zh = (review.get("title_zh") or "").strip()
                   content_zh = (review.get("text_zh") or "").strip()
+                  title_zh = distinct_translation(title, title_zh)
+                  content_zh = distinct_translation(content_en, content_zh)
                   summary = (review.get("summary_zh") or "").strip()
                   review_score = render_review_score(review.get("rating"))
 
