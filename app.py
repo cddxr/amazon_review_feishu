@@ -8,6 +8,7 @@ from review_incremental_supabase import run_once
 from review_incremental_only_new import create_supabase_client
 import traceback
 import os
+import re
 from datetime import datetime, timezone
 from datetime import timedelta
 from uuid import uuid4
@@ -15,10 +16,58 @@ from uuid import uuid4
 load_dotenv()
 
 app = FastAPI()
+SUPABASE_PAGE_SIZE = 1000
 
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def normalize_rating(value):
+    try:
+        rating = float(value)
+    except (TypeError, ValueError):
+        return None
+    return rating if 0 <= rating <= 5 else None
+
+
+def get_stored_rating_summary(supabase, asin: str):
+    ratings = []
+    start = 0
+    while True:
+        end = start + SUPABASE_PAGE_SIZE - 1
+        result = (
+            supabase.table("reviews")
+            .select("rating")
+            .eq("asin", asin)
+            .range(start, end)
+            .execute()
+        )
+        rows = result.data or []
+        ratings.extend(
+            rating
+            for rating in (normalize_rating(row.get("rating")) for row in rows)
+            if rating is not None
+        )
+        if len(rows) < SUPABASE_PAGE_SIZE:
+            break
+        start += SUPABASE_PAGE_SIZE
+
+    return {
+        "average_rating": round(sum(ratings) / len(ratings), 1) if ratings else None,
+        "rated_review_count": len(ratings),
+    }
+
+
+def review_date_sort_key(review):
+    origin = str(review.get("origin_description", "") or "").strip()
+    match = re.search(r"\bon\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})\s*$", origin)
+    if not match:
+        return 0.0
+    try:
+        return datetime.strptime(match.group(1), "%B %d, %Y").timestamp()
+    except ValueError:
+        return 0.0
 
 
 def ensure_required_env(translate_mode: str = "none"):
@@ -198,18 +247,19 @@ def get_sync_task(task_id: str):
 @app.get("/reviews/sync/state")
 def get_sync_state(asin: str = Query(..., description="Amazon ASIN")):
     ensure_required_env()
+    asin = asin.strip().upper()
     supabase = create_supabase_client()
     result = (
         supabase.table("review_sync_state")
         .select("asin,last_total_reviews,last_new_count,last_check_time,last_scraped_at,updated_at")
-        .eq("asin", asin.strip().upper())
+        .eq("asin", asin)
         .limit(1)
         .execute()
     )
     rows = result.data or []
     if not rows:
         raise HTTPException(status_code=404, detail={"error": "ASIN state not found"})
-    return rows[0]
+    return {**rows[0], **get_stored_rating_summary(supabase, asin)}
 
 
 @app.get("/reviews/sync/runs/new")
@@ -265,12 +315,12 @@ def get_asins_with_new_reviews(
 
                 reviews_res = (
                     supabase.table("reviews")
-                    .select("title,title_zh,text,text_zh,rating,summary_zh,tags,action_suggestions,scraped_at")
+                    .select("title,title_zh,text,text_zh,rating,origin_description,summary_zh,tags,action_suggestions,scraped_at")
                     .eq("asin", asin)
                     .gte("scraped_at", start_iso)
                     .lte("scraped_at", end_iso)
                     .order("scraped_at", desc=True)
-                    .limit(sample_size)
+                    .limit(max(100, sample_size))
                     .execute()
                 )
                 review_rows = reviews_res.data or []
@@ -278,14 +328,15 @@ def get_asins_with_new_reviews(
                     # Fallback: latest samples for this ASIN
                     reviews_res = (
                         supabase.table("reviews")
-                        .select("title,title_zh,text,text_zh,rating,summary_zh,tags,action_suggestions,scraped_at")
+                        .select("title,title_zh,text,text_zh,rating,origin_description,summary_zh,tags,action_suggestions,scraped_at")
                         .eq("asin", asin)
                         .order("scraped_at", desc=True)
-                        .limit(sample_size)
+                        .limit(max(100, sample_size))
                         .execute()
                     )
                     review_rows = reviews_res.data or []
-                item["new_reviews_sample"] = review_rows
+                review_rows.sort(key=review_date_sort_key, reverse=True)
+                item["new_reviews_sample"] = review_rows[:sample_size]
 
         return {
             "count": len(latest_by_asin),

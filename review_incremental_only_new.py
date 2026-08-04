@@ -315,6 +315,26 @@ def review_key(review: dict):
     return "||".join([author, title, text, rating, origin])
 
 
+def review_date_sort_key(review: dict) -> float:
+    origin = normalize_text(review.get("OriginDescription", ""))
+    match = re.search(r"\bon\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})\s*$", origin)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), "%B %d, %Y").timestamp()
+        except ValueError:
+            pass
+
+    raw_date = normalize_text(review.get("SubmissionDateStr", ""))
+    for date_format in ("%B %d, %Y", "%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            parsed = datetime.strptime(raw_date, date_format)
+            if parsed.year > 1970:
+                return parsed.timestamp()
+        except ValueError:
+            continue
+    return 0.0
+
+
 def scrape_basic(asin: str):
     return fetch_reviews(asin, filter_val=0, sort_val=0)
 
@@ -408,8 +428,10 @@ def enrich_reviews_inplace(
             review.update(enriched)
         except Exception as e:
             print(f"enrich review failed idx={idx}, fallback to empty ai fields, error={e}")
-            review["Title_zh"] = title if translate_mode in {"title", "full"} else ""
-            review["Text_zh"] = text if translate_mode == "full" else ""
+            # Never copy the source text into translation fields. The Feishu
+            # renderer displays both fields, so copying creates duplicates.
+            review["Title_zh"] = ""
+            review["Text_zh"] = ""
             review["summary_zh"] = ""
             review["tags"] = []
             review["action_suggestions"] = []
@@ -550,12 +572,18 @@ def incremental_update(
 
     current_keys = set(current_key_map.keys())
 
-    if not old_keys:
-        new_keys = current_keys
-    else:
-        new_keys = current_keys - old_keys
+    is_initial_sync = not old_keys
+    new_keys = set() if is_initial_sync else current_keys - old_keys
 
-    new_reviews = [current_key_map[k] for k in new_keys if k in current_key_map]
+    new_reviews = []
+    seen_new_keys = set()
+    for review in current_reviews:
+        key = review_key(review)
+        if key in new_keys and key not in seen_new_keys:
+            seen_new_keys.add(key)
+            new_reviews.append(review)
+    new_reviews.sort(key=review_date_sort_key, reverse=True)
+    reviews_to_store = list(current_key_map.values()) if is_initial_sync else new_reviews
 
     if translate_mode != "none" and new_reviews:
         if processor is None:
@@ -567,7 +595,7 @@ def incremental_update(
         )
 
     scraped_at = now_iso()
-    rows = to_review_rows(asin, new_reviews, scraped_at)
+    rows = to_review_rows(asin, reviews_to_store, scraped_at)
     upsert_result = upsert_reviews(supabase, rows)
     upsert_sync_state(
         supabase=supabase,
@@ -598,6 +626,7 @@ def incremental_update(
         "current_total": len(current_reviews),
         "new_count": len(new_reviews),
         "upserted_rows": (upsert_result or {}).get("upserted_rows", 0),
+        "initial_sync": is_initial_sync,
         "new_reviews_sample": new_reviews[:max(0, sample_size)],
     }
     if include_reviews:
